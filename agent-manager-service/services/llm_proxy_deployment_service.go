@@ -545,10 +545,7 @@ func (s *LLMProxyDeploymentService) generateLLMProxyDeploymentYAML(proxy *models
 			addOrAppendPolicyPath(&policies, apiKeyAuthPolicyName, apiKeyAuthPolicyVersion, models.LLMPolicyPath{
 				Path:    "/*",
 				Methods: []string{"*"},
-				Params: map[string]interface{}{
-					"key": key,
-					"in":  in,
-				},
+				Params:  apiKeyAuthParams(key, in),
 			})
 		}
 	}
