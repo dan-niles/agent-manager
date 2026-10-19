@@ -39,6 +39,16 @@ const (
 	A2APublicationStatusFailed A2APublicationStatus = "failed"
 )
 
+// A2APublicationSource says where the publication's upstream comes from.
+type A2APublicationSource string
+
+const (
+	// A2APublicationSourcePlatform rows publish a platform agent's release binding.
+	A2APublicationSourcePlatform A2APublicationSource = "platform"
+	// A2APublicationSourceExternal rows publish an external agent's origin, from its registered card.
+	A2APublicationSourceExternal A2APublicationSource = "external"
+)
+
 // A2APublication is one agent-environment pair's outstanding gateway
 // publication.
 //
@@ -59,7 +69,10 @@ type A2APublication struct {
 	// ArtifactUUID is the per-environment models.KindAgent artifact row. It is
 	// the agentId the gateway is told about and the key its API keys are bound
 	// to, so it is captured at enqueue time rather than re-derived later.
-	ArtifactUUID  uuid.UUID            `gorm:"column:artifact_uuid;type:uuid;not null"`
+	ArtifactUUID uuid.UUID `gorm:"column:artifact_uuid;type:uuid;not null"`
+	// AgentUUID is the agent the row was queued for; nil on rows queued before it was recorded.
+	AgentUUID     *uuid.UUID           `gorm:"column:agent_uuid;type:uuid"`
+	Source        A2APublicationSource `gorm:"column:source;not null;default:'platform'"`
 	Status        A2APublicationStatus `gorm:"column:status;not null;default:'pending'"`
 	AttemptCount  int                  `gorm:"column:attempt_count;not null;default:0"`
 	LastError     string               `gorm:"column:last_error;not null;default:''"`

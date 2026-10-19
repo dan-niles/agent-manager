@@ -129,6 +129,9 @@ import (
 //			GetProjectDeploymentPipelineFunc: func(ctx context.Context, ouID string, projectName string) (*models.DeploymentPipelineResponse, error) {
 //				panic("mock out the GetProjectDeploymentPipeline method")
 //			},
+//			GetReleaseBindingRolloutFunc: func(ctx context.Context, ouID string, componentName string, environment string) (client.ReleaseBindingRollout, error) {
+//				panic("mock out the GetReleaseBindingRollout method")
+//			},
 //			GetReleaseBindingServiceURLFunc: func(ctx context.Context, ouID string, componentName string, environment string) (string, error) {
 //				panic("mock out the GetReleaseBindingServiceURL method")
 //			},
@@ -213,7 +216,7 @@ import (
 //			ReplaceReleaseBindingWorkloadOverridesFunc: func(ctx context.Context, ouID string, componentName string, environment string, envOverrides []client.EnvVar, fileOverrides []client.FileVar) error {
 //				panic("mock out the ReplaceReleaseBindingWorkloadOverrides method")
 //			},
-//			TriggerBuildFunc: func(ctx context.Context, ouID string, projectName string, componentName string, commitID string) (*models.BuildResponse, error) {
+//			TriggerBuildFunc: func(ctx context.Context, ouID string, projectName string, componentName string, commitID string, workflowRunName string) (*models.BuildResponse, error) {
 //				panic("mock out the TriggerBuild method")
 //			},
 //			UpdateComponentBasicInfoFunc: func(ctx context.Context, ouID string, projectName string, componentName string, req client.UpdateComponentBasicInfoRequest) error {
@@ -370,6 +373,9 @@ type OpenChoreoClientMock struct {
 	// GetProjectDeploymentPipelineFunc mocks the GetProjectDeploymentPipeline method.
 	GetProjectDeploymentPipelineFunc func(ctx context.Context, ouID string, projectName string) (*models.DeploymentPipelineResponse, error)
 
+	// GetReleaseBindingRolloutFunc mocks the GetReleaseBindingRollout method.
+	GetReleaseBindingRolloutFunc func(ctx context.Context, ouID string, componentName string, environment string) (client.ReleaseBindingRollout, error)
+
 	// GetReleaseBindingServiceURLFunc mocks the GetReleaseBindingServiceURL method.
 	GetReleaseBindingServiceURLFunc func(ctx context.Context, ouID string, componentName string, environment string) (string, error)
 
@@ -455,7 +461,7 @@ type OpenChoreoClientMock struct {
 	ReplaceReleaseBindingWorkloadOverridesFunc func(ctx context.Context, ouID string, componentName string, environment string, envOverrides []client.EnvVar, fileOverrides []client.FileVar) error
 
 	// TriggerBuildFunc mocks the TriggerBuild method.
-	TriggerBuildFunc func(ctx context.Context, ouID string, projectName string, componentName string, commitID string) (*models.BuildResponse, error)
+	TriggerBuildFunc func(ctx context.Context, ouID string, projectName string, componentName string, commitID string, workflowRunName string) (*models.BuildResponse, error)
 
 	// UpdateComponentBasicInfoFunc mocks the UpdateComponentBasicInfo method.
 	UpdateComponentBasicInfoFunc func(ctx context.Context, ouID string, projectName string, componentName string, req client.UpdateComponentBasicInfoRequest) error
@@ -898,6 +904,17 @@ type OpenChoreoClientMock struct {
 			// ProjectName is the projectName argument value.
 			ProjectName string
 		}
+		// GetReleaseBindingRollout holds details about calls to the GetReleaseBindingRollout method.
+		GetReleaseBindingRollout []struct {
+			// Ctx is the ctx argument value.
+			Ctx context.Context
+			// OuID is the ouID argument value.
+			OuID string
+			// ComponentName is the componentName argument value.
+			ComponentName string
+			// Environment is the environment argument value.
+			Environment string
+		}
 		// GetReleaseBindingServiceURL holds details about calls to the GetReleaseBindingServiceURL method.
 		GetReleaseBindingServiceURL []struct {
 			// Ctx is the ctx argument value.
@@ -1208,6 +1225,8 @@ type OpenChoreoClientMock struct {
 			ComponentName string
 			// CommitID is the commitID argument value.
 			CommitID string
+			// WorkflowRunName is the workflowRunName argument value.
+			WorkflowRunName string
 		}
 		// UpdateComponentBasicInfo holds details about calls to the UpdateComponentBasicInfo method.
 		UpdateComponentBasicInfo []struct {
@@ -1407,6 +1426,7 @@ type OpenChoreoClientMock struct {
 	lockGetOrganization                        sync.RWMutex
 	lockGetProject                             sync.RWMutex
 	lockGetProjectDeploymentPipeline           sync.RWMutex
+	lockGetReleaseBindingRollout               sync.RWMutex
 	lockGetReleaseBindingServiceURL            sync.RWMutex
 	lockGetSecret                              sync.RWMutex
 	lockGetSecretReference                     sync.RWMutex
@@ -3070,6 +3090,50 @@ func (mock *OpenChoreoClientMock) GetProjectDeploymentPipelineCalls() []struct {
 	return calls
 }
 
+// GetReleaseBindingRollout calls GetReleaseBindingRolloutFunc.
+func (mock *OpenChoreoClientMock) GetReleaseBindingRollout(ctx context.Context, ouID string, componentName string, environment string) (client.ReleaseBindingRollout, error) {
+	if mock.GetReleaseBindingRolloutFunc == nil {
+		panic("OpenChoreoClientMock.GetReleaseBindingRolloutFunc: method is nil but OpenChoreoClient.GetReleaseBindingRollout was just called")
+	}
+	callInfo := struct {
+		Ctx           context.Context
+		OuID          string
+		ComponentName string
+		Environment   string
+	}{
+		Ctx:           ctx,
+		OuID:          ouID,
+		ComponentName: componentName,
+		Environment:   environment,
+	}
+	mock.lockGetReleaseBindingRollout.Lock()
+	mock.calls.GetReleaseBindingRollout = append(mock.calls.GetReleaseBindingRollout, callInfo)
+	mock.lockGetReleaseBindingRollout.Unlock()
+	return mock.GetReleaseBindingRolloutFunc(ctx, ouID, componentName, environment)
+}
+
+// GetReleaseBindingRolloutCalls gets all the calls that were made to GetReleaseBindingRollout.
+// Check the length with:
+//
+//	len(mockedOpenChoreoClient.GetReleaseBindingRolloutCalls())
+func (mock *OpenChoreoClientMock) GetReleaseBindingRolloutCalls() []struct {
+	Ctx           context.Context
+	OuID          string
+	ComponentName string
+	Environment   string
+} {
+	var calls []struct {
+		Ctx           context.Context
+		OuID          string
+		ComponentName string
+		Environment   string
+	}
+	mock.lockGetReleaseBindingRollout.RLock()
+	calls = mock.calls.GetReleaseBindingRollout
+	mock.lockGetReleaseBindingRollout.RUnlock()
+	return calls
+}
+
 // GetReleaseBindingServiceURL calls GetReleaseBindingServiceURLFunc.
 func (mock *OpenChoreoClientMock) GetReleaseBindingServiceURL(ctx context.Context, ouID string, componentName string, environment string) (string, error) {
 	if mock.GetReleaseBindingServiceURLFunc == nil {
@@ -4283,27 +4347,29 @@ func (mock *OpenChoreoClientMock) ReplaceReleaseBindingWorkloadOverridesCalls() 
 }
 
 // TriggerBuild calls TriggerBuildFunc.
-func (mock *OpenChoreoClientMock) TriggerBuild(ctx context.Context, ouID string, projectName string, componentName string, commitID string) (*models.BuildResponse, error) {
+func (mock *OpenChoreoClientMock) TriggerBuild(ctx context.Context, ouID string, projectName string, componentName string, commitID string, workflowRunName string) (*models.BuildResponse, error) {
 	if mock.TriggerBuildFunc == nil {
 		panic("OpenChoreoClientMock.TriggerBuildFunc: method is nil but OpenChoreoClient.TriggerBuild was just called")
 	}
 	callInfo := struct {
-		Ctx           context.Context
-		OuID          string
-		ProjectName   string
-		ComponentName string
-		CommitID      string
+		Ctx             context.Context
+		OuID            string
+		ProjectName     string
+		ComponentName   string
+		CommitID        string
+		WorkflowRunName string
 	}{
-		Ctx:           ctx,
-		OuID:          ouID,
-		ProjectName:   projectName,
-		ComponentName: componentName,
-		CommitID:      commitID,
+		Ctx:             ctx,
+		OuID:            ouID,
+		ProjectName:     projectName,
+		ComponentName:   componentName,
+		CommitID:        commitID,
+		WorkflowRunName: workflowRunName,
 	}
 	mock.lockTriggerBuild.Lock()
 	mock.calls.TriggerBuild = append(mock.calls.TriggerBuild, callInfo)
 	mock.lockTriggerBuild.Unlock()
-	return mock.TriggerBuildFunc(ctx, ouID, projectName, componentName, commitID)
+	return mock.TriggerBuildFunc(ctx, ouID, projectName, componentName, commitID, workflowRunName)
 }
 
 // TriggerBuildCalls gets all the calls that were made to TriggerBuild.
@@ -4311,18 +4377,20 @@ func (mock *OpenChoreoClientMock) TriggerBuild(ctx context.Context, ouID string,
 //
 //	len(mockedOpenChoreoClient.TriggerBuildCalls())
 func (mock *OpenChoreoClientMock) TriggerBuildCalls() []struct {
-	Ctx           context.Context
-	OuID          string
-	ProjectName   string
-	ComponentName string
-	CommitID      string
+	Ctx             context.Context
+	OuID            string
+	ProjectName     string
+	ComponentName   string
+	CommitID        string
+	WorkflowRunName string
 } {
 	var calls []struct {
-		Ctx           context.Context
-		OuID          string
-		ProjectName   string
-		ComponentName string
-		CommitID      string
+		Ctx             context.Context
+		OuID            string
+		ProjectName     string
+		ComponentName   string
+		CommitID        string
+		WorkflowRunName string
 	}
 	mock.lockTriggerBuild.RLock()
 	calls = mock.calls.TriggerBuild

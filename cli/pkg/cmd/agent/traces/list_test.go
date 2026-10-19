@@ -58,45 +58,57 @@ func TestListTraces_TextOutput(t *testing.T) {
 	}
 }
 
-func TestRunFilteredTraces_SameColumnsAsList(t *testing.T) {
-	ios, _, out, _ := iostreams.Test()
-	ios.JSON = false
+func TestRunToolCallFails_SameColumnsAsList(t *testing.T) {
+	ios, out, _ := newTraceTestIO(false)
 	startTime := time.Now().Add(-5 * time.Minute).UTC().Format(time.RFC3339Nano)
-	client, closeFn := newTraceTestClient(t, http.StatusOK, observersvc.TraceOverviewResponse{
-		TotalCount: 1,
-		Traces: []observersvc.TraceOverview{
+	failedTool := observersvc.Span{AmpAttributes: &observersvc.AmpAttributes{
+		Kind:   "tool",
+		Status: &observersvc.SpanStatus{Error: true},
+	}}
+	client, closeFn := newTraceTestClient(t, http.StatusOK, observersvc.TraceExportResponse{
+		TotalCount: 2,
+		Traces: []observersvc.FullTrace{
 			{
-				TraceID:         "abc123",
-				RootSpanID:      "rootspanidshouldnotshow",
-				RootSpanName:    "handle_request",
-				SpanCount:       100,
-				StartTime:       startTime,
-				DurationInNanos: 60_000_000_000,
+				TraceOverview: observersvc.TraceOverview{
+					TraceID:      "abc123",
+					RootSpanID:   "rootspanidshouldnotshow",
+					RootSpanName: "handle_request",
+					SpanCount:    100,
+					StartTime:    startTime,
+				},
+				Spans: []observersvc.Span{failedTool},
 			},
+			{TraceOverview: observersvc.TraceOverview{TraceID: "ok456", RootSpanName: "no_tool_error"}},
 		},
 	})
 	defer closeFn()
 
-	err := runFilteredTraces(context.Background(), &ListTracesOptions{
+	err := runToolCallFails(context.Background(), &ListTracesOptions{
 		IO: ios, TraceClient: client, Scope: traceBaseScope(),
 		Org: "acme", Proj: "triage", AgentName: "my-agent", Env: "dev",
 		StartTime: "2026-05-12T00:00:00Z", EndTime: "2026-05-13T00:00:00Z",
 		Limit:     10,
-		Condition: conditionExcessiveSteps,
-		MaxSpans:  10,
+		Condition: conditionToolCallFails,
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	got := out.String()
-	if !strings.Contains(got, "handle_request") {
-		t.Errorf("filtered output should show RootSpanName (handle_request), got %q", got)
+	if !strings.Contains(got, "abc123") {
+		t.Errorf("filtered output should show the matching trace (abc123), got %q", got)
+	}
+	if strings.Contains(got, "ok456") {
+		t.Errorf("a trace without a failed tool span should be left out, got %q", got)
 	}
 	if strings.Contains(got, "rootspanidshould") {
 		t.Errorf("filtered output should NOT show RootSpanID, got %q", got)
 	}
 	if !strings.Contains(got, "ago") {
 		t.Errorf("filtered output should include the 'started' column (relative time), got %q", got)
+	}
+	// Export carries no conversation ID or models.
+	if strings.Contains(got, "CONVERSATION") || strings.Contains(got, "MODEL") {
+		t.Errorf("tool_call_fails table should leave out Conversation and Model, got %q", got)
 	}
 }
 
@@ -126,7 +138,7 @@ func TestRenderFilteredOverview_JSONShapeStableWhenEmpty(t *testing.T) {
 	ios, _, out, _ := iostreams.Test()
 	ios.JSON = true
 
-	err := renderFilteredOverview(&ListTracesOptions{IO: ios, Scope: traceBaseScope()}, nil)
+	err := renderFilteredOverview(&ListTracesOptions{IO: ios, Scope: traceBaseScope()}, &observersvc.TraceExportResponse{}, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -147,11 +159,11 @@ func TestRenderFilteredOverview_JSONShapeStableWhenEmpty(t *testing.T) {
 	if arr, ok := traces.([]any); !ok || len(arr) != 0 {
 		t.Errorf("traces should be empty array, got %T %v", traces, traces)
 	}
-	count, ok := envelope.Data["count"]
+	count, ok := envelope.Data["totalCount"]
 	if !ok {
-		t.Fatalf("data missing \"count\" key (non-empty branch uses \"count\"): %s", out.String())
+		t.Fatalf("data missing \"totalCount\" key: %s", out.String())
 	}
 	if n, _ := count.(float64); n != 0 {
-		t.Errorf("count = %v, want 0", count)
+		t.Errorf("totalCount = %v, want 0", count)
 	}
 }

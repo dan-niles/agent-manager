@@ -111,11 +111,16 @@ type OpenChoreoClient interface {
 	// reports it. Empty string with a nil error means the binding has not
 	// published one yet.
 	GetReleaseBindingServiceURL(ctx context.Context, ouID, componentName, environment string) (string, error)
+	// GetReleaseBindingRollout reports the binding's release and whether its rollout has finished.
+	GetReleaseBindingRollout(ctx context.Context, ouID, componentName, environment string) (ReleaseBindingRollout, error)
 	GetComponentConfigurations(ctx context.Context, ouID, projectName, componentName, environment string) ([]models.EnvVars, error)
 	GetComponentFileMounts(ctx context.Context, ouID, projectName, componentName, environment string) ([]models.FileMountEntry, error)
 
 	// Build Operations
-	TriggerBuild(ctx context.Context, ouID, projectName, componentName, commitID string) (*models.BuildResponse, error)
+	// workflowRunName may be supplied by the service when deployment-specific work must
+	// happen before the run is created. An empty value preserves the default behavior and
+	// lets the client generate the name.
+	TriggerBuild(ctx context.Context, ouID, projectName, componentName, commitID, workflowRunName string) (*models.BuildResponse, error)
 	GetBuild(ctx context.Context, ouID, projectName, componentName, buildName string) (*models.BuildDetailsResponse, error)
 	ListBuilds(ctx context.Context, ouID, projectName, componentName string) ([]*models.BuildResponse, error)
 	UpdateComponentBuildParameters(ctx context.Context, ouID, projectName, componentName string, req UpdateComponentBuildParametersRequest) error

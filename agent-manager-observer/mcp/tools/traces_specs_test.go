@@ -18,6 +18,7 @@ package tools
 
 import (
 	"context"
+	"slices"
 	"testing"
 	"time"
 
@@ -25,6 +26,13 @@ import (
 
 	"github.com/wso2/agent-manager/agent-manager-observer/observer"
 )
+
+// traceListOptionalParams are the optional inputs list_traces and get_traces share.
+var traceListOptionalParams = []string{
+	"start_time", "end_time", "limit", "sort_order",
+	"status", "min_duration_ms", "min_tokens", "min_span_count", "model", "conversation_id",
+	"tool", "tool_error", "mcp_server", "missing",
+}
 
 // Returns the test specs for tools registered by registerTraceTools.
 // New tools added to traces.go must have a spec here — registration_test.go fails otherwise.
@@ -42,7 +50,7 @@ func tracesToolSpecs() []toolTestSpec {
 			descriptionKeywords: []string{"trace"},
 			descriptionMinLen:   20,
 			requiredParams:      []string{"organization", "project", "agent", "environment"},
-			optionalParams:      []string{"start_time", "end_time", "limit", "sort_order"},
+			optionalParams:      append(slices.Clone(traceListOptionalParams), "include_models", "include_tools", "include_mcp_servers", "cursor"),
 			testArgs:            baseTraceArgs,
 		},
 		{
@@ -50,7 +58,7 @@ func tracesToolSpecs() []toolTestSpec {
 			descriptionKeywords: []string{"trace", "span"},
 			descriptionMinLen:   20,
 			requiredParams:      []string{"organization", "project", "agent", "environment"},
-			optionalParams:      []string{"start_time", "end_time", "limit", "sort_order"},
+			optionalParams:      traceListOptionalParams,
 			testArgs:            baseTraceArgs,
 		},
 		{

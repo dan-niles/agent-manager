@@ -299,7 +299,7 @@ export const buildAgentCreationPayload = (
       },
       agentType: {
         type: "external-agent-api",
-        subType: "custom-api",
+        subType: ("externalSubType" in data && data.externalSubType) || "custom-api",
       },
       ...(modelConfig ? { modelConfig } : {}),
     },

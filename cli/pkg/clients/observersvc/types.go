@@ -35,6 +35,7 @@ type HTTPError struct {
 	RawBody    []byte
 }
 
+// Error returns the status code and message.
 func (e *HTTPError) Error() string {
 	if e.Body != nil && e.Body.Message != "" {
 		return fmt.Sprintf("observer: %d %s: %s", e.StatusCode, e.Body.Error, e.Body.Message)
@@ -78,11 +79,19 @@ type TraceOverview struct {
 	Status          *TraceStatus `json:"status,omitempty"`
 	Input           any          `json:"input,omitempty"`
 	Output          any          `json:"output,omitempty"`
+	Models          []string     `json:"models,omitempty"`
+	ConversationID  string       `json:"conversationId,omitempty"`
+	Tools           []string     `json:"tools,omitempty"`
+	FailedTools     []string     `json:"failedTools,omitempty"`
+	MCPServers      []string     `json:"mcpServers,omitempty"`
 }
 
 type TraceOverviewResponse struct {
-	Traces     []TraceOverview `json:"traces"`
-	TotalCount int             `json:"totalCount"`
+	Traces       []TraceOverview `json:"traces"`
+	TotalCount   int             `json:"totalCount"`
+	LookedBackTo string          `json:"lookedBackTo"`
+	Truncated    bool            `json:"truncated"`
+	NextCursor   string          `json:"nextCursor,omitempty"`
 }
 
 type Span struct {
@@ -109,9 +118,12 @@ type FullTrace struct {
 }
 
 type TraceExportResponse struct {
-	Traces     []FullTrace `json:"traces"`
-	TotalCount int         `json:"totalCount"`
-	Truncated  bool        `json:"truncated"`
+	Traces         []FullTrace `json:"traces"`
+	TotalCount     int         `json:"totalCount"`
+	LookedBackTo   string      `json:"lookedBackTo,omitempty"`
+	Truncated      bool        `json:"truncated"`
+	SpansTruncated bool        `json:"spansTruncated"`
+	FailedTraceIDs []string    `json:"failedTraceIds,omitempty"`
 }
 
 type SpanSummary struct {
@@ -138,6 +150,30 @@ type ListTracesParams struct {
 	EndTime      time.Time
 	Limit        *int
 	SortOrder    *string
+
+	// Filters run server-side and AND together. Min* are pointers so an
+	// explicit 0 still filters.
+	Status         string
+	MinDurationMs  *int64
+	MinTokens      *int64
+	MinSpanCount   *int64
+	Model          string
+	ConversationID string
+	// Missing names fields a trace must lack, in the API's spelling (conversationId).
+	Missing []string
+
+	// Tool and MCPServer are substrings; with Tool set, ToolError needs that tool to fail.
+	Tool      string
+	ToolError bool
+	MCPServer string
+
+	// Include* fill the matching TraceOverview fields; only ListTraces sends them.
+	IncludeModels     bool
+	IncludeTools      bool
+	IncludeMCPServers bool
+
+	// Cursor is an earlier page's nextCursor; only ListTraces sends it.
+	Cursor string
 }
 
 type ExportTracesParams = ListTracesParams

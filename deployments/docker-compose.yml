@@ -93,6 +93,8 @@ services:
       # Uses the default OpenBao that comes with OpenChoreo for both user and system secrets
       - SECRET_MANAGER_PROVIDER=openbao
       - OPENBAO_URL=http://host.docker.internal:8200
+      # Platform A2A card fetches dial the host gateway; *.localhost resolves to the container itself.
+      - A2A_CARD_FETCH_DIAL_ADDR=host.docker.internal:19080
       - OPENBAO_TOKEN=root
       - OPENBAO_PATH=secret
       - OPENBAO_VERSION=v2
@@ -107,13 +109,25 @@ services:
       - THUNDER_CLIENT_SECRET=amp-system-client-secret
       # Encryption Configuration (AES-256-GCM, hex-encoded 32-byte key)
       - ENCRYPTION_KEY=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+      # Platform-admin cross-organization routes (GET /api/v1/platform/...).
+      # PLATFORM_ADMIN_OU_ID is the only org allowed to call them; empty denies
+      # every request. The default below is ThunderID's built-in "default" OU,
+      # fixed on every install and carried by every local token, so the routes
+      # work out of the box in local dev. Override in your shell to test a
+      # refusal. The two thresholds decide when one gateway counts as failed and
+      # when the fleet as a whole is reported unhealthy (503 instead of 200).
+      - PLATFORM_ADMIN_OU_ID=${PLATFORM_ADMIN_OU_ID:-01900000-0000-7000-8000-000000000001}
+      - GATEWAY_FAILURE_THRESHOLD_SECONDS=${GATEWAY_FAILURE_THRESHOLD_SECONDS:-300}
+      # 604800 = 7 days. Disconnected gateways older than this are reported
+      # as abandoned and excluded from the failure-percentage denominator.
+      - GATEWAY_FAILURE_MAX_AGE_SECONDS=${GATEWAY_FAILURE_MAX_AGE_SECONDS:-604800}
+      - GATEWAY_FAILURE_PERCENTAGE_THRESHOLD=${GATEWAY_FAILURE_PERCENTAGE_THRESHOLD:-10}
     volumes:
       # Mount source code for hot-reloading
       - ../agent-manager-service:/app
       # Use container-specific keys (not host) so paths are correct
       - agent_manager_keys:/app/keys
-      # Exclude vendor and tmp directories from mount
-      - /app/vendor
+      # Keep container build output off the host mount
       - /app/tmp
       - /app/.bin
     depends_on:

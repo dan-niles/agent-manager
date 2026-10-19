@@ -422,9 +422,6 @@ func promoteBallerinaAgentHarness(t *testing.T, sourceSetting bool, requested *b
 			return &models.Artifact{UUID: uuid.New(), Kind: models.KindAgent}, nil
 		},
 	}
-	s.a2aPublicationRepo = &repomocks.A2APublicationRepositoryMock{
-		EnqueueFunc: func(_ context.Context, _ *models.A2APublication) error { return nil },
-	}
 
 	require.NoError(t, s.PromoteAgent(tierGrantedCtx(t), "acme", "proj1", "my-agent", &spec.PromoteAgentRequest{
 		SourceEnvironment:               "dev",

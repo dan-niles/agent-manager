@@ -25,8 +25,8 @@ import (
 // configurables) instead of AMP_AGENTID_*. Defaults to false so every existing
 // agent keeps the plain names: a Ballerina program that does not declare the
 // matching configurables fails to start when they are injected.
-var migration047 = migration{
-	ID: 47,
+var migration049 = migration{
+	ID: 49,
 	Migrate: func(db *gorm.DB) error {
 		return db.Exec(`
 		ALTER TABLE agent_configs

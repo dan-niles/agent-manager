@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -120,6 +121,28 @@ func (h *Handler) GetTraceOverviews(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	include, err := parseInclude(query["include"])
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	filters, err := parseTraceFilters(query)
+	if err != nil {
+		log.Info("Rejected trace filter", "organization", organization, "error", err)
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	var cursor *controllers.TraceCursor
+	if raw := query.Get("cursor"); raw != "" {
+		if cursor, err = controllers.DecodeTraceCursor(raw); err != nil {
+			log.Info("Rejected trace list cursor", "organization", organization, "error", err)
+			writeError(w, http.StatusBadRequest, "invalid cursor")
+			return
+		}
+	}
+
 	params := controllers.TraceQueryParams{
 		Organization: organization,
 		Project:      &project,
@@ -129,6 +152,9 @@ func (h *Handler) GetTraceOverviews(w http.ResponseWriter, r *http.Request) {
 		EndTime:      endTime,
 		Limit:        limit,
 		SortOrder:    sortOrder,
+		Include:      include,
+		Filters:      filters,
+		Cursor:       cursor,
 	}
 
 	result, err := h.controller.GetTraceOverviews(r.Context(), params)
@@ -259,6 +285,13 @@ func (h *Handler) ExportTraces(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	filters, err := parseTraceFilters(query)
+	if err != nil {
+		log.Info("Rejected trace filter", "organization", organization, "error", err)
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
 	params := controllers.TraceQueryParams{
 		Organization: organization,
 		Project:      &project,
@@ -268,6 +301,7 @@ func (h *Handler) ExportTraces(w http.ResponseWriter, r *http.Request) {
 		EndTime:      endTime,
 		Limit:        limit,
 		SortOrder:    sortOrder,
+		Filters:      filters,
 	}
 
 	result, err := h.controller.ExportTraces(r.Context(), params)
@@ -533,6 +567,7 @@ func pathSegment(path, prefix, suffix string) string {
 	return seg
 }
 
+// parseRFC3339 parses s as an RFC 3339 time.
 func parseRFC3339(s string) (time.Time, error) {
 	if s == "" {
 		return time.Time{}, fmt.Errorf("value is required")
@@ -540,6 +575,7 @@ func parseRFC3339(s string) (time.Time, error) {
 	return time.Parse(time.RFC3339, s)
 }
 
+// parseLimit parses a page size, defaulting to defaultVal and capped at maxVal.
 func parseLimit(s string, defaultVal, maxVal int) (int, error) {
 	if s == "" {
 		return defaultVal, nil
@@ -554,6 +590,7 @@ func parseLimit(s string, defaultVal, maxVal int) (int, error) {
 	return v, nil
 }
 
+// parseSortOrder parses asc or desc, defaulting to defaultVal.
 func parseSortOrder(s, defaultVal string) (string, error) {
 	if s == "" {
 		return defaultVal, nil
@@ -562,6 +599,113 @@ func parseSortOrder(s, defaultVal string) (string, error) {
 		return "", fmt.Errorf("sortOrder must be 'asc' or 'desc'")
 	}
 	return s, nil
+}
+
+// parseInclude parses the comma-separated include query parameter of
+// GET /api/v1/traces; unknown values are an error.
+func parseInclude(raw []string) (controllers.Include, error) {
+	var include controllers.Include
+	for _, list := range raw {
+		for _, item := range strings.Split(list, ",") {
+			switch v := strings.TrimSpace(item); v {
+			case "":
+			case "models":
+				include.Models = true
+			case "tools":
+				include.Tools = true
+			case "mcpServers":
+				include.MCPServers = true
+			default:
+				return controllers.Include{}, fmt.Errorf("invalid include value %q: must be one of 'models', 'tools', 'mcpServers'", v)
+			}
+		}
+	}
+	return include, nil
+}
+
+// parseTraceFilters parses the optional filter params of GET /api/v1/traces.
+func parseTraceFilters(query url.Values) (controllers.TraceFilters, error) {
+	var f controllers.TraceFilters
+
+	var err error
+	if f.Status, err = controllers.ParseTraceStatus(query.Get("status")); err != nil {
+		return controllers.TraceFilters{}, err
+	}
+	if f.MinDurationMs, err = parseMinThreshold("minDurationMs", query.Get("minDurationMs")); err != nil {
+		return controllers.TraceFilters{}, err
+	}
+	if f.MinTokens, err = parseMinThreshold("minTokens", query.Get("minTokens")); err != nil {
+		return controllers.TraceFilters{}, err
+	}
+	if f.MinSpanCount, err = parseMinThreshold("minSpanCount", query.Get("minSpanCount")); err != nil {
+		return controllers.TraceFilters{}, err
+	}
+
+	f.Model = query.Get("model")
+	if err := controllers.CheckFilterValue("model", f.Model); err != nil {
+		return controllers.TraceFilters{}, err
+	}
+	f.ConversationID = query.Get("conversationId")
+	if err := controllers.CheckFilterValue("conversationId", f.ConversationID); err != nil {
+		return controllers.TraceFilters{}, err
+	}
+	f.Tool = query.Get("tool")
+	if err := controllers.CheckFilterValue("tool", f.Tool); err != nil {
+		return controllers.TraceFilters{}, err
+	}
+	if f.ToolError, err = parseToolError(query.Get("toolError")); err != nil {
+		return controllers.TraceFilters{}, err
+	}
+	f.MCPServer = query.Get("mcpServer")
+	if err := controllers.CheckFilterValue("mcpServer", f.MCPServer); err != nil {
+		return controllers.TraceFilters{}, err
+	}
+	if f.Missing, err = parseMissing(query["missing"]); err != nil {
+		return controllers.TraceFilters{}, err
+	}
+	if err := controllers.CheckMissingConflict(f, "conversationId"); err != nil {
+		return controllers.TraceFilters{}, err
+	}
+	return f, nil
+}
+
+// parseMissing parses the comma-separated missing query parameter; unknown values are an error.
+func parseMissing(raw []string) (controllers.MissingFields, error) {
+	var missing controllers.MissingFields
+	for _, list := range raw {
+		for _, item := range strings.Split(list, ",") {
+			if err := controllers.ParseMissingField(&missing, item, "conversationId"); err != nil {
+				return controllers.MissingFields{}, err
+			}
+		}
+	}
+	return missing, nil
+}
+
+// parseToolError accepts an empty value or "false" (unset) and "true".
+func parseToolError(s string) (bool, error) {
+	switch s {
+	case "", "false":
+		return false, nil
+	case "true":
+		return true, nil
+	}
+	return false, fmt.Errorf("toolError must be 'true' or 'false'")
+}
+
+// parseMinThreshold parses an optional non-negative integer filter.
+func parseMinThreshold(name, s string) (*int64, error) {
+	if s == "" {
+		return nil, nil
+	}
+	v, err := strconv.ParseInt(s, 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("%s must be a non-negative integer", name)
+	}
+	if err := controllers.CheckMinThreshold(name, v); err != nil {
+		return nil, err
+	}
+	return &v, nil
 }
 
 // validateLogTimeRange ports validateTimes from
@@ -628,6 +772,7 @@ func parseOptionalLimit(s string, maxVal int) (*int, error) {
 	return &v, nil
 }
 
+// optionalStr returns a pointer to s, or nil when s is empty.
 func optionalStr(s string) *string {
 	if s == "" {
 		return nil
@@ -635,6 +780,7 @@ func optionalStr(s string) *string {
 	return &s
 }
 
+// writeJSON writes data as a JSON response with status.
 func writeJSON(w http.ResponseWriter, status int, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
@@ -643,6 +789,7 @@ func writeJSON(w http.ResponseWriter, status int, data interface{}) {
 	}
 }
 
+// writeError writes message as a JSON error response with status.
 func writeError(w http.ResponseWriter, status int, message string) {
 	writeJSON(w, status, ErrorResponse{Error: "error", Message: message})
 }

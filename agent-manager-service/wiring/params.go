@@ -60,6 +60,8 @@ type AppParams struct {
 	LLMProviderAPIKeyController      controllers.LLMProviderAPIKeyController
 	LLMProxyAPIKeyController         controllers.LLMProxyAPIKeyController
 	AgentAPIKeyController            controllers.AgentAPIKeyController
+	A2AAgentCardController           controllers.A2AAgentCardController
+	A2AProxyController               controllers.A2AProxyController
 	LLMProxyDeploymentController     controllers.LLMProxyDeploymentController
 	MCPProxyController               controllers.MCPProxyController
 	WebSocketController              controllers.WebSocketController
@@ -78,11 +80,13 @@ type AppParams struct {
 	MonitorScheduler                 services.MonitorSchedulerService
 	AgentThunderReconciler           services.AgentThunderReconcilerService
 	A2APublicationReconciler         services.A2APublicationReconcilerService
+	A2ACardReconciler                services.A2ACardReconcilerService
 
 	// Services
 	LLMTemplateStore              *services.LLMTemplateStore
 	InfraResourceManager          services.InfraResourceManager
 	AgentManagerService           services.AgentManagerService
+	RepositoryService             services.RepositoryService
 	AgentTokenManagerService      services.AgentTokenManagerService
 	AgentIdentityInjectionService services.AgentIdentityInjectionService
 	EnvironmentService            services.EnvironmentService

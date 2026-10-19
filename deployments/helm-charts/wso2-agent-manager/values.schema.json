@@ -791,7 +791,7 @@
                   "type": "string"
                 },
                 "defaultInstrumentationVersion": {
-                  "default": "0.4.1",
+                  "default": "0.4.2",
                   "description": "Platform default AMP instrumentation version. Must exist in the effective catalog (embedded baseline \u222a additionalInstrumentationVersions); otherwise the server fails to start.",
                   "title": "defaultInstrumentationVersion",
                   "type": "string"
@@ -1250,6 +1250,18 @@
                   "default": "amp-thunder-extension-service.amp-thunder.svc.cluster.local:8090",
                   "description": "The host:port this service actually connects to for every Thunder request (baseURL's host is still sent as the HTTP Host header, and still drives the resource-identifier above). Needed here because baseURL is a *.localhost hostname that only resolves via the host machine's own DNS/hosts setup \u2014 it doesn't resolve from inside this pod. Leave empty only if baseURL is itself directly dialable from the pod (e.g. a real in-cluster DNS name).",
                   "title": "resolveToHost",
+                  "type": "string"
+                },
+                "useDefaultResourceServer": {
+                  "default": false,
+                  "description": "Omit the OAuth resource parameter and let Thunder select its configured default resource server. Keep false when this Thunder instance registers its own <baseURL>/mcp System resource server.",
+                  "title": "useDefaultResourceServer",
+                  "type": "boolean"
+                },
+                "systemResourceIdentifier": {
+                  "default": "",
+                  "description": "Optional absolute URI overriding the derived <baseURL>/mcp identifier. Cannot be set together with useDefaultResourceServer=true.",
+                  "title": "systemResourceIdentifier",
                   "type": "string"
                 },
                 "clientId": {

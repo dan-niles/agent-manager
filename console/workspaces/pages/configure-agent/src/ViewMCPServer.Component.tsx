@@ -97,6 +97,10 @@ import { EnvironmentVariablesGuideDrawer } from "./Configure/subComponents/Envir
 import { MCPServerDisplay } from "./Configure/subComponents/MCPServerDisplay";
 import { MCPProxyAPIKeysSection } from "./Configure/subComponents/MCPProxyAPIKeysSection";
 import { CONFIGURE_TAB_PARAM } from "./configureTabs";
+import {
+  BUILD_IN_PROGRESS_REASON,
+  useHasBuildInProgress,
+} from "./utils/buildInProgress";
 
 type AuthInfoEntry = {
   type: string;
@@ -386,6 +390,10 @@ export const ViewMCPServerComponent = () => {
   const agentIdAsBalConfigurables =
     selectedEnvConfig?.agentIdAsBallerinaConfigurables === true;
   const isExternal = agent?.provisioning?.type === "external";
+  const hasBuildInProgress = useHasBuildInProgress(
+    { orgName: orgId, projName: projectId, agentName: agentId },
+    { enabled: !!agent && !isExternal && !agent.kindName },
+  );
 
   const { data: environments = [], isError: isEnvironmentsError } = useListEnvironments({
     orgName: orgId,
@@ -903,6 +911,9 @@ export const ViewMCPServerComponent = () => {
         onSave={handleSave}
         isDirty={isDirty}
         isSaving={updateConfig.isPending}
+        saveBlockedReason={
+          hasBuildInProgress ? BUILD_IN_PROGRESS_REASON : undefined
+        }
         hasInvalidNames={hasEmptyEnvVarName || isMCPSecurityUnresolved}
         error={updateConfig.isError ? updateConfig.error : undefined}
         description={

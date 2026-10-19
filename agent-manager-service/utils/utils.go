@@ -523,6 +523,14 @@ func validateAgentType(agentType spec.AgentType) error {
 	if agentType.Type != string(AgentTypeAPI) && agentType.Type != string(AgentTypeExternalAPI) {
 		return fmt.Errorf("unsupported agent type: %s", agentType.Type)
 	}
+	// External subtypes are free-form, so a miscased "a2a-agent" would silently lose A2A support.
+	subType := StrPointerAsStr(agentType.SubType, "")
+	if strings.EqualFold(subType, string(AgentSubTypeA2A)) && !IsA2AAgentSubType(subType) {
+		return NewValidationErrorf(
+			fmt.Sprintf("Use the agent subtype %q for an A2A agent", AgentSubTypeA2A),
+			"miscased A2A agent subtype: %s", subType,
+		)
+	}
 	return nil
 }
 
@@ -1485,6 +1493,22 @@ func ValidateListCommitsRequest(payload *spec.ListCommitsRequest) error {
 	// payload, so only the reference itself is validated here.
 	if payload.HasSecretRef() && payload.GetSecretRef() == "" {
 		return fmt.Errorf("secretRef cannot be empty")
+	}
+
+	if payload.HasProjectName() != payload.HasComponentName() {
+		return fmt.Errorf("projectName and componentName must be provided together")
+	}
+	if payload.HasProjectName() {
+		projectName := strings.TrimSpace(payload.GetProjectName())
+		componentName := strings.TrimSpace(payload.GetComponentName())
+		if projectName == "" || componentName == "" {
+			return fmt.Errorf("projectName and componentName cannot be empty")
+		}
+		if !isValidGitHubIdentifier(projectName) || !isValidGitHubIdentifier(componentName) {
+			return fmt.Errorf("projectName or componentName contains invalid characters or path traversal patterns")
+		}
+		payload.ProjectName = &projectName
+		payload.ComponentName = &componentName
 	}
 	return nil
 }

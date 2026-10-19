@@ -12,6 +12,27 @@ import (
 	openapi_types "github.com/oapi-codegen/runtime/types"
 )
 
+// Defines values for A2AProxyResponseStatus.
+const (
+	A2AProxyResponseStatusFailed    A2AProxyResponseStatus = "failed"
+	A2AProxyResponseStatusPending   A2AProxyResponseStatus = "pending"
+	A2AProxyResponseStatusPublished A2AProxyResponseStatus = "published"
+)
+
+// Valid indicates whether the value is a known member of the A2AProxyResponseStatus enum.
+func (e A2AProxyResponseStatus) Valid() bool {
+	switch e {
+	case A2AProxyResponseStatusFailed:
+		return true
+	case A2AProxyResponseStatusPending:
+		return true
+	case A2AProxyResponseStatusPublished:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for APIKeySecurityIn.
 const (
 	APIKeySecurityInHeader APIKeySecurityIn = "header"
@@ -24,6 +45,45 @@ func (e APIKeySecurityIn) Valid() bool {
 	case APIKeySecurityInHeader:
 		return true
 	case APIKeySecurityInQuery:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentCardResponseSource.
+const (
+	AgentCardResponseSourceExternal AgentCardResponseSource = "external"
+	AgentCardResponseSourcePlatform AgentCardResponseSource = "platform"
+)
+
+// Valid indicates whether the value is a known member of the AgentCardResponseSource enum.
+func (e AgentCardResponseSource) Valid() bool {
+	switch e {
+	case AgentCardResponseSourceExternal:
+		return true
+	case AgentCardResponseSourcePlatform:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentCardResponseStatus.
+const (
+	AgentCardResponseStatusFailed  AgentCardResponseStatus = "failed"
+	AgentCardResponseStatusFetched AgentCardResponseStatus = "fetched"
+	AgentCardResponseStatusPending AgentCardResponseStatus = "pending"
+)
+
+// Valid indicates whether the value is a known member of the AgentCardResponseStatus enum.
+func (e AgentCardResponseStatus) Valid() bool {
+	switch e {
+	case AgentCardResponseStatusFailed:
+		return true
+	case AgentCardResponseStatusFetched:
+		return true
+	case AgentCardResponseStatusPending:
 		return true
 	default:
 		return false
@@ -1170,6 +1230,33 @@ func (e GetAgentTraceScoresParamsSortOrder) Valid() bool {
 	}
 }
 
+// A2AProxyResponse How an external A2A agent is published through the environment's ingress gateway.
+type A2AProxyResponse struct {
+	// GatewayUrl The agent's base URL on the environment's ingress gateway, where its card is served at /.well-known/agent-card.json once published. Empty while no ingress gateway is mapped to the environment.
+	GatewayUrl string `json:"gatewayUrl"`
+
+	// LastError Why the last publish attempt failed; empty after a success.
+	LastError string `json:"lastError"`
+
+	// Status The gateway publication's state.
+	Status A2AProxyResponseStatus `json:"status"`
+
+	// UpstreamAuthHeader The header the gateway adds upstream; empty when none. A non-empty header means a secret is stored. The secret itself is never returned.
+	UpstreamAuthHeader string `json:"upstreamAuthHeader"`
+}
+
+// A2AProxyResponseStatus The gateway publication's state.
+type A2AProxyResponseStatus string
+
+// A2AProxyUpstreamAuth A static header the gateway adds to every call to the agent, card fetch included.
+type A2AProxyUpstreamAuth struct {
+	// Header Header name. Host is not allowed.
+	Header string `json:"header"`
+
+	// Value Header value: at most 8192 bytes, with no quote, "%", control character (including line breaks and tabs) or "{{". Omit it to keep the stored secret.
+	Value *string `json:"value,omitempty"`
+}
+
 // APIKeyInfo Masked, read-only view of a stored API key for listing. The plain key value is never returned; only the masked representation.
 type APIKeyInfo struct {
 	// CreatedAt Creation timestamp in RFC3339 format.
@@ -1286,6 +1373,33 @@ type AgentCardCORSConfig struct {
 	// Inherit When true the card follows the agent's CORS: enabled when agent CORS is, with the agent's origins and credentials setting and Content-Type as the only header. On a request, true clears any stored override and the other fields are ignored. On a response, the other fields hold the effective values.
 	Inherit *bool `json:"inherit,omitempty"`
 }
+
+// AgentCardResponse An A2A agent's stored public agent card for one environment, and the state of its fetch.
+type AgentCardResponse struct {
+	// Card The last good card, as returned by the agent. Absent until the first successful fetch.
+	Card *map[string]interface{} `json:"card,omitempty"`
+
+	// FetchedAt Time of the last successful fetch. Absent until then.
+	FetchedAt *time.Time `json:"fetchedAt,omitempty"`
+
+	// LastError Why the last attempt failed; empty after a success.
+	LastError string `json:"lastError"`
+
+	// Source platform cards are fetched through the environment's gateway; external cards from a registered URL.
+	Source AgentCardResponseSource `json:"source"`
+
+	// SourceUrl The registered URL (external) or the URL last fetched (platform).
+	SourceUrl string `json:"sourceUrl"`
+
+	// Status pending while a fetch is due or retrying; failed once the retry budget ran out.
+	Status AgentCardResponseStatus `json:"status"`
+}
+
+// AgentCardResponseSource platform cards are fetched through the environment's gateway; external cards from a registered URL.
+type AgentCardResponseSource string
+
+// AgentCardResponseStatus pending while a fetch is due or retrying; failed once the retry budget ran out.
+type AgentCardResponseStatus string
 
 // AgentCreatedBy The user who created this agent. Resolved from an audit-only
 // requester id captured at creation time, so it is best-effort and
@@ -2247,6 +2361,9 @@ type CreateAgentRequest struct {
 
 	// DisplayName Display name of the agent
 	DisplayName string `json:"displayName"`
+
+	// GithubApp Optional GitHub App source binding for cloud deployments. The control plane consumes this metadata, persists it through the deployment-provided repository source provider, and never forwards it to OpenChoreo. When omitted, public-repository and PAT-backed behavior is unchanged.
+	GithubApp *GitHubAppSource `json:"githubApp,omitempty"`
 
 	// InputInterface Endpoint configurations
 	InputInterface *InputInterface `json:"inputInterface,omitempty"`
@@ -3239,6 +3356,27 @@ type GitCredentials struct {
 	Username string `json:"username"`
 }
 
+// GitHubAppSource Optional GitHub App source binding for cloud deployments. The control plane consumes this metadata, persists it through the deployment-provided repository source provider, and never forwards it to OpenChoreo. When omitted, public-repository and PAT-backed behavior is unchanged.
+type GitHubAppSource struct {
+	// AppPath Source directory; defaults to provisioning.repository.appPath
+	AppPath *string `json:"appPath,omitempty"`
+
+	// Branch Branch to build; defaults to provisioning.repository.branch
+	Branch *string `json:"branch,omitempty"`
+
+	// InstallationId GitHub App installation that grants access to the repository
+	InstallationId int64 `json:"installationId"`
+
+	// Owner GitHub repository owner or organization
+	Owner string `json:"owner"`
+
+	// Repo GitHub repository name without the owner prefix
+	Repo string `json:"repo"`
+
+	// RepositoryUrl Repository clone URL; defaults to provisioning.repository.url
+	RepositoryUrl *string `json:"repositoryUrl,omitempty"`
+}
+
 // GitSecretListResponse defines model for GitSecretListResponse.
 type GitSecretListResponse struct {
 	// Limit Number of results per page
@@ -3851,11 +3989,17 @@ type ListCommitsRequest struct {
 	// Branch Branch name or SHA to list commits from (defaults to repository's default branch)
 	Branch *string `json:"branch,omitempty"`
 
+	// ComponentName Optional component name used to resolve a deployment-specific repository binding
+	ComponentName *string `json:"componentName,omitempty"`
+
 	// Owner Repository owner (organization or user)
 	Owner string `json:"owner"`
 
 	// Path Filter commits affecting this file path
 	Path *string `json:"path,omitempty"`
+
+	// ProjectName Optional project name used to resolve a deployment-specific repository binding
+	ProjectName *string `json:"projectName,omitempty"`
 
 	// Repo Repository name
 	Repo string `json:"repo"`
@@ -4900,6 +5044,18 @@ type SecuritySummary struct {
 
 	// Enabled Whether security is enabled
 	Enabled *bool `json:"enabled,omitempty"`
+}
+
+// SetA2AProxyRequest defines model for SetA2AProxyRequest.
+type SetA2AProxyRequest struct {
+	// UpstreamAuth A static header the gateway adds to every call to the agent, card fetch included.
+	UpstreamAuth *A2AProxyUpstreamAuth `json:"upstreamAuth,omitempty"`
+}
+
+// SetAgentCardSourceRequest defines model for SetAgentCardSourceRequest.
+type SetAgentCardSourceRequest struct {
+	// Url Public http(s) URL of the agent card, normally ending in /.well-known/agent-card.json.
+	Url string `json:"url"`
 }
 
 // StoredAPIKey defines model for StoredAPIKey.
@@ -6161,6 +6317,12 @@ type DeployAgentJSONRequestBody = DeployAgentRequest
 
 // UpdateAgentDeploymentStateJSONRequestBody defines body for UpdateAgentDeploymentState for application/json ContentType.
 type UpdateAgentDeploymentStateJSONRequestBody = UpdateDeploymentStateRequest
+
+// SetA2AProxyJSONRequestBody defines body for SetA2AProxy for application/json ContentType.
+type SetA2AProxyJSONRequestBody = SetA2AProxyRequest
+
+// SetAgentCardSourceJSONRequestBody defines body for SetAgentCardSource for application/json ContentType.
+type SetAgentCardSourceJSONRequestBody = SetAgentCardSourceRequest
 
 // CreateAgentAPIKeyJSONRequestBody defines body for CreateAgentAPIKey for application/json ContentType.
 type CreateAgentAPIKeyJSONRequestBody = CreateLLMAPIKeyRequest

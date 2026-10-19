@@ -649,6 +649,34 @@ type ClientInterface interface {
 	// GetAgentEndpoints request
 	GetAgentEndpoints(ctx context.Context, orgName string, projName string, agentName string, params *GetAgentEndpointsParams, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// DeleteA2AProxy request
+	DeleteA2AProxy(ctx context.Context, orgName string, projName string, agentName string, envID string, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// GetA2AProxy request
+	GetA2AProxy(ctx context.Context, orgName string, projName string, agentName string, envID string, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// SetA2AProxyWithBody request with any body
+	SetA2AProxyWithBody(ctx context.Context, orgName string, projName string, agentName string, envID string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	SetA2AProxy(ctx context.Context, orgName string, projName string, agentName string, envID string, body SetA2AProxyJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// RefreshA2AProxy request
+	RefreshA2AProxy(ctx context.Context, orgName string, projName string, agentName string, envID string, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// GetAgentCard request
+	GetAgentCard(ctx context.Context, orgName string, projName string, agentName string, envID string, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// RefreshAgentCard request
+	RefreshAgentCard(ctx context.Context, orgName string, projName string, agentName string, envID string, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// DeleteAgentCardSource request
+	DeleteAgentCardSource(ctx context.Context, orgName string, projName string, agentName string, envID string, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// SetAgentCardSourceWithBody request with any body
+	SetAgentCardSourceWithBody(ctx context.Context, orgName string, projName string, agentName string, envID string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	SetAgentCardSource(ctx context.Context, orgName string, projName string, agentName string, envID string, body SetAgentCardSourceJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// ListAgentAPIKeys request
 	ListAgentAPIKeys(ctx context.Context, orgName string, projName string, agentName string, envID string, reqEditors ...RequestEditorFn) (*http.Response, error)
 
@@ -3343,6 +3371,126 @@ func (c *Client) UpdateAgentDeploymentState(ctx context.Context, orgName string,
 
 func (c *Client) GetAgentEndpoints(ctx context.Context, orgName string, projName string, agentName string, params *GetAgentEndpointsParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewGetAgentEndpointsRequest(c.Server, orgName, projName, agentName, params)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) DeleteA2AProxy(ctx context.Context, orgName string, projName string, agentName string, envID string, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewDeleteA2AProxyRequest(c.Server, orgName, projName, agentName, envID)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) GetA2AProxy(ctx context.Context, orgName string, projName string, agentName string, envID string, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetA2AProxyRequest(c.Server, orgName, projName, agentName, envID)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) SetA2AProxyWithBody(ctx context.Context, orgName string, projName string, agentName string, envID string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewSetA2AProxyRequestWithBody(c.Server, orgName, projName, agentName, envID, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) SetA2AProxy(ctx context.Context, orgName string, projName string, agentName string, envID string, body SetA2AProxyJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewSetA2AProxyRequest(c.Server, orgName, projName, agentName, envID, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) RefreshA2AProxy(ctx context.Context, orgName string, projName string, agentName string, envID string, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewRefreshA2AProxyRequest(c.Server, orgName, projName, agentName, envID)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) GetAgentCard(ctx context.Context, orgName string, projName string, agentName string, envID string, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetAgentCardRequest(c.Server, orgName, projName, agentName, envID)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) RefreshAgentCard(ctx context.Context, orgName string, projName string, agentName string, envID string, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewRefreshAgentCardRequest(c.Server, orgName, projName, agentName, envID)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) DeleteAgentCardSource(ctx context.Context, orgName string, projName string, agentName string, envID string, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewDeleteAgentCardSourceRequest(c.Server, orgName, projName, agentName, envID)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) SetAgentCardSourceWithBody(ctx context.Context, orgName string, projName string, agentName string, envID string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewSetAgentCardSourceRequestWithBody(c.Server, orgName, projName, agentName, envID, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) SetAgentCardSource(ctx context.Context, orgName string, projName string, agentName string, envID string, body SetAgentCardSourceJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewSetAgentCardSourceRequest(c.Server, orgName, projName, agentName, envID, body)
 	if err != nil {
 		return nil, err
 	}
@@ -12415,6 +12563,472 @@ func NewGetAgentEndpointsRequest(server string, orgName string, projName string,
 	return req, nil
 }
 
+// NewDeleteA2AProxyRequest generates requests for DeleteA2AProxy
+func NewDeleteA2AProxyRequest(server string, orgName string, projName string, agentName string, envID string) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "orgName", orgName, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam1 string
+
+	pathParam1, err = runtime.StyleParamWithOptions("simple", false, "projName", projName, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam2 string
+
+	pathParam2, err = runtime.StyleParamWithOptions("simple", false, "agentName", agentName, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam3 string
+
+	pathParam3, err = runtime.StyleParamWithOptions("simple", false, "envID", envID, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/orgs/%s/projects/%s/agents/%s/environments/%s/a2a-proxy", pathParam0, pathParam1, pathParam2, pathParam3)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("DELETE", queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewGetA2AProxyRequest generates requests for GetA2AProxy
+func NewGetA2AProxyRequest(server string, orgName string, projName string, agentName string, envID string) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "orgName", orgName, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam1 string
+
+	pathParam1, err = runtime.StyleParamWithOptions("simple", false, "projName", projName, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam2 string
+
+	pathParam2, err = runtime.StyleParamWithOptions("simple", false, "agentName", agentName, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam3 string
+
+	pathParam3, err = runtime.StyleParamWithOptions("simple", false, "envID", envID, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/orgs/%s/projects/%s/agents/%s/environments/%s/a2a-proxy", pathParam0, pathParam1, pathParam2, pathParam3)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("GET", queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewSetA2AProxyRequest calls the generic SetA2AProxy builder with application/json body
+func NewSetA2AProxyRequest(server string, orgName string, projName string, agentName string, envID string, body SetA2AProxyJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewSetA2AProxyRequestWithBody(server, orgName, projName, agentName, envID, "application/json", bodyReader)
+}
+
+// NewSetA2AProxyRequestWithBody generates requests for SetA2AProxy with any type of body
+func NewSetA2AProxyRequestWithBody(server string, orgName string, projName string, agentName string, envID string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "orgName", orgName, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam1 string
+
+	pathParam1, err = runtime.StyleParamWithOptions("simple", false, "projName", projName, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam2 string
+
+	pathParam2, err = runtime.StyleParamWithOptions("simple", false, "agentName", agentName, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam3 string
+
+	pathParam3, err = runtime.StyleParamWithOptions("simple", false, "envID", envID, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/orgs/%s/projects/%s/agents/%s/environments/%s/a2a-proxy", pathParam0, pathParam1, pathParam2, pathParam3)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("PUT", queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewRefreshA2AProxyRequest generates requests for RefreshA2AProxy
+func NewRefreshA2AProxyRequest(server string, orgName string, projName string, agentName string, envID string) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "orgName", orgName, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam1 string
+
+	pathParam1, err = runtime.StyleParamWithOptions("simple", false, "projName", projName, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam2 string
+
+	pathParam2, err = runtime.StyleParamWithOptions("simple", false, "agentName", agentName, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam3 string
+
+	pathParam3, err = runtime.StyleParamWithOptions("simple", false, "envID", envID, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/orgs/%s/projects/%s/agents/%s/environments/%s/a2a-proxy/refresh", pathParam0, pathParam1, pathParam2, pathParam3)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("POST", queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewGetAgentCardRequest generates requests for GetAgentCard
+func NewGetAgentCardRequest(server string, orgName string, projName string, agentName string, envID string) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "orgName", orgName, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam1 string
+
+	pathParam1, err = runtime.StyleParamWithOptions("simple", false, "projName", projName, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam2 string
+
+	pathParam2, err = runtime.StyleParamWithOptions("simple", false, "agentName", agentName, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam3 string
+
+	pathParam3, err = runtime.StyleParamWithOptions("simple", false, "envID", envID, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/orgs/%s/projects/%s/agents/%s/environments/%s/agent-card", pathParam0, pathParam1, pathParam2, pathParam3)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("GET", queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewRefreshAgentCardRequest generates requests for RefreshAgentCard
+func NewRefreshAgentCardRequest(server string, orgName string, projName string, agentName string, envID string) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "orgName", orgName, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam1 string
+
+	pathParam1, err = runtime.StyleParamWithOptions("simple", false, "projName", projName, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam2 string
+
+	pathParam2, err = runtime.StyleParamWithOptions("simple", false, "agentName", agentName, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam3 string
+
+	pathParam3, err = runtime.StyleParamWithOptions("simple", false, "envID", envID, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/orgs/%s/projects/%s/agents/%s/environments/%s/agent-card/refresh", pathParam0, pathParam1, pathParam2, pathParam3)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("POST", queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewDeleteAgentCardSourceRequest generates requests for DeleteAgentCardSource
+func NewDeleteAgentCardSourceRequest(server string, orgName string, projName string, agentName string, envID string) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "orgName", orgName, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam1 string
+
+	pathParam1, err = runtime.StyleParamWithOptions("simple", false, "projName", projName, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam2 string
+
+	pathParam2, err = runtime.StyleParamWithOptions("simple", false, "agentName", agentName, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam3 string
+
+	pathParam3, err = runtime.StyleParamWithOptions("simple", false, "envID", envID, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/orgs/%s/projects/%s/agents/%s/environments/%s/agent-card/source", pathParam0, pathParam1, pathParam2, pathParam3)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("DELETE", queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewSetAgentCardSourceRequest calls the generic SetAgentCardSource builder with application/json body
+func NewSetAgentCardSourceRequest(server string, orgName string, projName string, agentName string, envID string, body SetAgentCardSourceJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewSetAgentCardSourceRequestWithBody(server, orgName, projName, agentName, envID, "application/json", bodyReader)
+}
+
+// NewSetAgentCardSourceRequestWithBody generates requests for SetAgentCardSource with any type of body
+func NewSetAgentCardSourceRequestWithBody(server string, orgName string, projName string, agentName string, envID string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "orgName", orgName, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam1 string
+
+	pathParam1, err = runtime.StyleParamWithOptions("simple", false, "projName", projName, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam2 string
+
+	pathParam2, err = runtime.StyleParamWithOptions("simple", false, "agentName", agentName, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam3 string
+
+	pathParam3, err = runtime.StyleParamWithOptions("simple", false, "envID", envID, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/orgs/%s/projects/%s/agents/%s/environments/%s/agent-card/source", pathParam0, pathParam1, pathParam2, pathParam3)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("PUT", queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
 // NewListAgentAPIKeysRequest generates requests for ListAgentAPIKeys
 func NewListAgentAPIKeysRequest(server string, orgName string, projName string, agentName string, envID string) (*http.Request, error) {
 	var err error
@@ -17511,6 +18125,34 @@ type ClientWithResponsesInterface interface {
 	// GetAgentEndpointsWithResponse request
 	GetAgentEndpointsWithResponse(ctx context.Context, orgName string, projName string, agentName string, params *GetAgentEndpointsParams, reqEditors ...RequestEditorFn) (*GetAgentEndpointsResp, error)
 
+	// DeleteA2AProxyWithResponse request
+	DeleteA2AProxyWithResponse(ctx context.Context, orgName string, projName string, agentName string, envID string, reqEditors ...RequestEditorFn) (*DeleteA2AProxyResp, error)
+
+	// GetA2AProxyWithResponse request
+	GetA2AProxyWithResponse(ctx context.Context, orgName string, projName string, agentName string, envID string, reqEditors ...RequestEditorFn) (*GetA2AProxyResp, error)
+
+	// SetA2AProxyWithBodyWithResponse request with any body
+	SetA2AProxyWithBodyWithResponse(ctx context.Context, orgName string, projName string, agentName string, envID string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*SetA2AProxyResp, error)
+
+	SetA2AProxyWithResponse(ctx context.Context, orgName string, projName string, agentName string, envID string, body SetA2AProxyJSONRequestBody, reqEditors ...RequestEditorFn) (*SetA2AProxyResp, error)
+
+	// RefreshA2AProxyWithResponse request
+	RefreshA2AProxyWithResponse(ctx context.Context, orgName string, projName string, agentName string, envID string, reqEditors ...RequestEditorFn) (*RefreshA2AProxyResp, error)
+
+	// GetAgentCardWithResponse request
+	GetAgentCardWithResponse(ctx context.Context, orgName string, projName string, agentName string, envID string, reqEditors ...RequestEditorFn) (*GetAgentCardResp, error)
+
+	// RefreshAgentCardWithResponse request
+	RefreshAgentCardWithResponse(ctx context.Context, orgName string, projName string, agentName string, envID string, reqEditors ...RequestEditorFn) (*RefreshAgentCardResp, error)
+
+	// DeleteAgentCardSourceWithResponse request
+	DeleteAgentCardSourceWithResponse(ctx context.Context, orgName string, projName string, agentName string, envID string, reqEditors ...RequestEditorFn) (*DeleteAgentCardSourceResp, error)
+
+	// SetAgentCardSourceWithBodyWithResponse request with any body
+	SetAgentCardSourceWithBodyWithResponse(ctx context.Context, orgName string, projName string, agentName string, envID string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*SetAgentCardSourceResp, error)
+
+	SetAgentCardSourceWithResponse(ctx context.Context, orgName string, projName string, agentName string, envID string, body SetAgentCardSourceJSONRequestBody, reqEditors ...RequestEditorFn) (*SetAgentCardSourceResp, error)
+
 	// ListAgentAPIKeysWithResponse request
 	ListAgentAPIKeysWithResponse(ctx context.Context, orgName string, projName string, agentName string, envID string, reqEditors ...RequestEditorFn) (*ListAgentAPIKeysResp, error)
 
@@ -21511,6 +22153,211 @@ func (r GetAgentEndpointsResp) StatusCode() int {
 	return 0
 }
 
+type DeleteA2AProxyResp struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON400      *ErrorResponse
+	JSON403      *ErrorResponse
+	JSON404      *ErrorResponse
+	JSON500      *ErrorResponse
+	JSON503      *ErrorResponse
+}
+
+// Status returns HTTPResponse.Status
+func (r DeleteA2AProxyResp) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r DeleteA2AProxyResp) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type GetA2AProxyResp struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *A2AProxyResponse
+	JSON401      *ErrorResponse
+	JSON404      *ErrorResponse
+	JSON500      *ErrorResponse
+}
+
+// Status returns HTTPResponse.Status
+func (r GetA2AProxyResp) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetA2AProxyResp) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type SetA2AProxyResp struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON400      *ErrorResponse
+	JSON403      *ErrorResponse
+	JSON404      *ErrorResponse
+	JSON409      *ErrorResponse
+	JSON500      *ErrorResponse
+	JSON503      *ErrorResponse
+}
+
+// Status returns HTTPResponse.Status
+func (r SetA2AProxyResp) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r SetA2AProxyResp) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type RefreshA2AProxyResp struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON400      *ErrorResponse
+	JSON403      *ErrorResponse
+	JSON404      *ErrorResponse
+	JSON500      *ErrorResponse
+}
+
+// Status returns HTTPResponse.Status
+func (r RefreshA2AProxyResp) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r RefreshA2AProxyResp) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type GetAgentCardResp struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *AgentCardResponse
+	JSON401      *ErrorResponse
+	JSON404      *ErrorResponse
+	JSON500      *ErrorResponse
+}
+
+// Status returns HTTPResponse.Status
+func (r GetAgentCardResp) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetAgentCardResp) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type RefreshAgentCardResp struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON400      *ErrorResponse
+	JSON403      *ErrorResponse
+	JSON404      *ErrorResponse
+	JSON500      *ErrorResponse
+}
+
+// Status returns HTTPResponse.Status
+func (r RefreshAgentCardResp) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r RefreshAgentCardResp) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type DeleteAgentCardSourceResp struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON400      *ErrorResponse
+	JSON403      *ErrorResponse
+	JSON404      *ErrorResponse
+	JSON500      *ErrorResponse
+	JSON503      *ErrorResponse
+}
+
+// Status returns HTTPResponse.Status
+func (r DeleteAgentCardSourceResp) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r DeleteAgentCardSourceResp) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type SetAgentCardSourceResp struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON400      *ErrorResponse
+	JSON403      *ErrorResponse
+	JSON404      *ErrorResponse
+	JSON409      *ErrorResponse
+	JSON500      *ErrorResponse
+}
+
+// Status returns HTTPResponse.Status
+func (r SetAgentCardSourceResp) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r SetAgentCardSourceResp) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
 type ListAgentAPIKeysResp struct {
 	Body         []byte
 	HTTPResponse *http.Response
@@ -24987,6 +25834,94 @@ func (c *ClientWithResponses) GetAgentEndpointsWithResponse(ctx context.Context,
 		return nil, err
 	}
 	return ParseGetAgentEndpointsResp(rsp)
+}
+
+// DeleteA2AProxyWithResponse request returning *DeleteA2AProxyResp
+func (c *ClientWithResponses) DeleteA2AProxyWithResponse(ctx context.Context, orgName string, projName string, agentName string, envID string, reqEditors ...RequestEditorFn) (*DeleteA2AProxyResp, error) {
+	rsp, err := c.DeleteA2AProxy(ctx, orgName, projName, agentName, envID, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseDeleteA2AProxyResp(rsp)
+}
+
+// GetA2AProxyWithResponse request returning *GetA2AProxyResp
+func (c *ClientWithResponses) GetA2AProxyWithResponse(ctx context.Context, orgName string, projName string, agentName string, envID string, reqEditors ...RequestEditorFn) (*GetA2AProxyResp, error) {
+	rsp, err := c.GetA2AProxy(ctx, orgName, projName, agentName, envID, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetA2AProxyResp(rsp)
+}
+
+// SetA2AProxyWithBodyWithResponse request with arbitrary body returning *SetA2AProxyResp
+func (c *ClientWithResponses) SetA2AProxyWithBodyWithResponse(ctx context.Context, orgName string, projName string, agentName string, envID string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*SetA2AProxyResp, error) {
+	rsp, err := c.SetA2AProxyWithBody(ctx, orgName, projName, agentName, envID, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseSetA2AProxyResp(rsp)
+}
+
+func (c *ClientWithResponses) SetA2AProxyWithResponse(ctx context.Context, orgName string, projName string, agentName string, envID string, body SetA2AProxyJSONRequestBody, reqEditors ...RequestEditorFn) (*SetA2AProxyResp, error) {
+	rsp, err := c.SetA2AProxy(ctx, orgName, projName, agentName, envID, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseSetA2AProxyResp(rsp)
+}
+
+// RefreshA2AProxyWithResponse request returning *RefreshA2AProxyResp
+func (c *ClientWithResponses) RefreshA2AProxyWithResponse(ctx context.Context, orgName string, projName string, agentName string, envID string, reqEditors ...RequestEditorFn) (*RefreshA2AProxyResp, error) {
+	rsp, err := c.RefreshA2AProxy(ctx, orgName, projName, agentName, envID, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseRefreshA2AProxyResp(rsp)
+}
+
+// GetAgentCardWithResponse request returning *GetAgentCardResp
+func (c *ClientWithResponses) GetAgentCardWithResponse(ctx context.Context, orgName string, projName string, agentName string, envID string, reqEditors ...RequestEditorFn) (*GetAgentCardResp, error) {
+	rsp, err := c.GetAgentCard(ctx, orgName, projName, agentName, envID, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetAgentCardResp(rsp)
+}
+
+// RefreshAgentCardWithResponse request returning *RefreshAgentCardResp
+func (c *ClientWithResponses) RefreshAgentCardWithResponse(ctx context.Context, orgName string, projName string, agentName string, envID string, reqEditors ...RequestEditorFn) (*RefreshAgentCardResp, error) {
+	rsp, err := c.RefreshAgentCard(ctx, orgName, projName, agentName, envID, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseRefreshAgentCardResp(rsp)
+}
+
+// DeleteAgentCardSourceWithResponse request returning *DeleteAgentCardSourceResp
+func (c *ClientWithResponses) DeleteAgentCardSourceWithResponse(ctx context.Context, orgName string, projName string, agentName string, envID string, reqEditors ...RequestEditorFn) (*DeleteAgentCardSourceResp, error) {
+	rsp, err := c.DeleteAgentCardSource(ctx, orgName, projName, agentName, envID, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseDeleteAgentCardSourceResp(rsp)
+}
+
+// SetAgentCardSourceWithBodyWithResponse request with arbitrary body returning *SetAgentCardSourceResp
+func (c *ClientWithResponses) SetAgentCardSourceWithBodyWithResponse(ctx context.Context, orgName string, projName string, agentName string, envID string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*SetAgentCardSourceResp, error) {
+	rsp, err := c.SetAgentCardSourceWithBody(ctx, orgName, projName, agentName, envID, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseSetAgentCardSourceResp(rsp)
+}
+
+func (c *ClientWithResponses) SetAgentCardSourceWithResponse(ctx context.Context, orgName string, projName string, agentName string, envID string, body SetAgentCardSourceJSONRequestBody, reqEditors ...RequestEditorFn) (*SetAgentCardSourceResp, error) {
+	rsp, err := c.SetAgentCardSource(ctx, orgName, projName, agentName, envID, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseSetAgentCardSourceResp(rsp)
 }
 
 // ListAgentAPIKeysWithResponse request returning *ListAgentAPIKeysResp
@@ -32636,6 +33571,417 @@ func ParseGetAgentEndpointsResp(rsp *http.Response) (*GetAgentEndpointsResp, err
 			return nil, err
 		}
 		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest ErrorResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseDeleteA2AProxyResp parses an HTTP response from a DeleteA2AProxyWithResponse call
+func ParseDeleteA2AProxyResp(rsp *http.Response) (*DeleteA2AProxyResp, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &DeleteA2AProxyResp{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest ErrorResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ErrorResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest ErrorResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest ErrorResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest ErrorResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON503 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseGetA2AProxyResp parses an HTTP response from a GetA2AProxyWithResponse call
+func ParseGetA2AProxyResp(rsp *http.Response) (*GetA2AProxyResp, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetA2AProxyResp{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest A2AProxyResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest ErrorResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest ErrorResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest ErrorResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseSetA2AProxyResp parses an HTTP response from a SetA2AProxyWithResponse call
+func ParseSetA2AProxyResp(rsp *http.Response) (*SetA2AProxyResp, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &SetA2AProxyResp{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest ErrorResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ErrorResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest ErrorResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest ErrorResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest ErrorResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest ErrorResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON503 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseRefreshA2AProxyResp parses an HTTP response from a RefreshA2AProxyWithResponse call
+func ParseRefreshA2AProxyResp(rsp *http.Response) (*RefreshA2AProxyResp, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &RefreshA2AProxyResp{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest ErrorResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ErrorResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest ErrorResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest ErrorResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseGetAgentCardResp parses an HTTP response from a GetAgentCardWithResponse call
+func ParseGetAgentCardResp(rsp *http.Response) (*GetAgentCardResp, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetAgentCardResp{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest AgentCardResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest ErrorResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest ErrorResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest ErrorResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseRefreshAgentCardResp parses an HTTP response from a RefreshAgentCardWithResponse call
+func ParseRefreshAgentCardResp(rsp *http.Response) (*RefreshAgentCardResp, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &RefreshAgentCardResp{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest ErrorResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ErrorResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest ErrorResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest ErrorResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseDeleteAgentCardSourceResp parses an HTTP response from a DeleteAgentCardSourceWithResponse call
+func ParseDeleteAgentCardSourceResp(rsp *http.Response) (*DeleteAgentCardSourceResp, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &DeleteAgentCardSourceResp{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest ErrorResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ErrorResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest ErrorResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest ErrorResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest ErrorResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON503 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseSetAgentCardSourceResp parses an HTTP response from a SetAgentCardSourceWithResponse call
+func ParseSetAgentCardSourceResp(rsp *http.Response) (*SetAgentCardSourceResp, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &SetAgentCardSourceResp{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest ErrorResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ErrorResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest ErrorResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest ErrorResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
 		var dest ErrorResponse
