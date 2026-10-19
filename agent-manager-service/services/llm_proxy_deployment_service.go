@@ -684,3 +684,12 @@ func (s *LLMProxyDeploymentService) BroadcastLLMProxyDeletion(ctx context.Contex
 		}
 	}
 }
+
+// apiKeyAuthParams accepts "Authorization: Bearer <key>" from agents, the only form OpenAI-compatible clients send; providers keep the raw form their proxies forward.
+func apiKeyAuthParams(key, in string) map[string]interface{} {
+	params := map[string]interface{}{"key": key, "in": in}
+	if in == "header" && strings.EqualFold(key, "Authorization") {
+		params["valuePrefix"] = "Bearer "
+	}
+	return params
+}

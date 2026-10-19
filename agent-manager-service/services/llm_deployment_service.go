@@ -487,16 +487,6 @@ func (s *LLMProviderDeploymentService) DeleteLLMProviderDeployment(providerID, d
 }
 
 // generateLLMProviderDeploymentYAML generates deployment YAML for an LLM provider
-
-// apiKeyAuthParams accepts a key sent as "Authorization: Bearer <key>", the only form OpenAI-compatible clients can send.
-func apiKeyAuthParams(key, in string) map[string]interface{} {
-	params := map[string]interface{}{"key": key, "in": in}
-	if in == "header" && strings.EqualFold(key, "Authorization") {
-		params["valuePrefix"] = "Bearer "
-	}
-	return params
-}
-
 func (s *LLMProviderDeploymentService) generateLLMProviderDeploymentYAML(provider *models.LLMProvider, ouID string) (string, error) {
 	// ouID parameter is reserved for future use in multi-tenant scenarios
 	_ = ouID
@@ -583,7 +573,10 @@ func (s *LLMProviderDeploymentService) generateLLMProviderDeploymentYAML(provide
 			addOrAppendPolicyPath(&policies, apiKeyAuthPolicyName, apiKeyAuthPolicyVersion, models.LLMPolicyPath{
 				Path:    "/*",
 				Methods: []string{"*"},
-				Params:  apiKeyAuthParams(key, in),
+				Params: map[string]interface{}{
+					"key": key,
+					"in":  in,
+				},
 			})
 		}
 	}
