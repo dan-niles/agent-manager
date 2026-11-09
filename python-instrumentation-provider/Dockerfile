@@ -5,7 +5,7 @@
 ARG PYTHON_VERSION=3.11
 # traceloop-sdk (OpenLLMetry) version pinned into this image. One pinned version
 # per AMP instrumentation image; bump it by building a new AMP instrumentation version.
-ARG TRACELOOP_VERSION=0.62.4
+ARG TRACELOOP_VERSION=0.63.0
 
 ############### STAGE 1 — BUILD INSTRUMENTATION PACKAGES ###############
 FROM public.ecr.aws/docker/library/python:${PYTHON_VERSION}-slim AS otel-tracing
@@ -41,6 +41,10 @@ COPY --from=otel-tracing /instrumentation/packages /instrumentations/otel-tracin
 COPY setup-instrumentation.py /usr/local/bin/setup-instrumentation.py
 # Make the script executable so the container can run it as an entrypoint.
 RUN chmod +x /usr/local/bin/setup-instrumentation.py
+
+# Run as non-root. The init container only reads the bundled packages and writes
+# them into the pod's emptyDir (world-writable), so it needs no root access.
+USER 1000:1000
 
 ENV INSTRUMENTATION_PROVIDER=otel-tracing
 CMD ["python3", "/usr/local/bin/setup-instrumentation.py"]

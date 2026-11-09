@@ -115,7 +115,7 @@ export function AddMCPToolConfigPanel({
     usePipelineEnvironmentsState(orgId, projectId);
   const { data: proxiesData, isLoading: isLoadingProxies } = useListMCPProxies(
     { orgName: orgId },
-    { limit: 50, offset: 0 },
+    { limit: 50, offset: 0, project: projectId },
   );
   const { data: existingConfigsList } = useListAgentMCPConfigs(
     { orgName: orgId, projName: projectId, agentName: agentId },
@@ -368,7 +368,7 @@ export function AddMCPToolConfigPanel({
                               )
                             }
                           >
-                            Register MCP Server
+                            Register MCP server
                           </Button>
                         ) : undefined
                       }

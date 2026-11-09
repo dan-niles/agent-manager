@@ -17,10 +17,19 @@
  */
 
 import type { ThunderIDProviderProps } from "@thunderid/react";
+import type { FeatureFlags } from "@agent-management-platform/feature-management";
 import { TraceListTimeRange } from "../api/traces";
 import { type Duration, sub } from "date-fns";
 export interface AppConfig {
   authConfig: ThunderIDProviderProps;
+  /**
+   * URL path prefix the console is served under, e.g. "/console" when it
+   * sits behind a shared host. Empty or "/" means
+   * the origin root. Must match the Vite `base` the bundle was built with
+   * (both come from BASE_PATH); the router basename and every hard
+   * navigation outside the router go through `withBasePath`.
+   */
+  basePath?: string;
   apiBaseUrl: string;
   /**
    * Base URL for the unauthenticated GET /api/v1/config discovery request that
@@ -44,6 +53,20 @@ export interface AppConfig {
    * fail — to any host serving deployments/scripts, without a trailing slash.
    */
   scriptBaseUrl?: string;
+  /**
+   * Private registry the platform was installed from, as a host and path prefix
+   * (e.g. "registry.example.com/my-project"). Empty for the public registry.
+   * When set, the generated environment and identity provider commands pull
+   * the gateway extension chart from it, and the environment command runs from
+   * the release bundle so it can create the image pull secrets.
+   */
+  ampRegistry?: string;
+  /** Helm chart registry of a private install. Empty derives `<ampRegistry>/helm-charts`. */
+  ampChartRegistry?: string;
+  /** Release bundle the private-registry environment command extracts the scripts from. */
+  bundleUrl?: string;
+  /** Version of the installed Agent Manager chart, e.g. "2.0.0-u1". */
+  chartVersion?: string;
   /**
    * Base URL the evaluator AI Copilot prompt links the writing guide from.
    * Empty (the default) derives the public raw.githubusercontent.com URL for the
@@ -115,6 +138,7 @@ export interface AppConfig {
   footerLinks?: {
     privacyPolicyUrl?: string;
     termsOfUseUrl?: string;
+    supportUrl?: string;
   };
   /** Documentation deep-link paths for AMP instrumentation, appended to docsUrl. */
   instrumentationDocLinks?: {
@@ -123,29 +147,9 @@ export interface AppConfig {
     /** Path to the AMP instrumentation version mapping section. */
     versionMapping?: string;
   };
-  /** Feature flags. All default to false (disabled) unless explicitly enabled. */
-  featureFlags?: FeatureFlags;
+  /** Feature flags, read through @agent-management-platform/feature-management. */
+  featureFlags?: Partial<FeatureFlags>;
 }
-
-export type FeatureFlags = {
-  /** Shows the private Git repository option when building agents from source. */
-  enablePrivateRepoSupport?: boolean;
-  /**
-   * When true, identity provider management calls the REST API directly instead of
-   * rendering the self-hosted manage-identity-provider.sh script snippet.
-   */
-  enableIdentityProviderManagedMode?: boolean;
-  /**
-   * When false, the Profile Settings text fields and Save Changes button are
-   * hidden/disabled, and the Change Password tab is disabled.
-   */
-  enableProfileManagement?: boolean;
-  /**
-   * When false, the Add User, Invite User, Create Role, and Create Group
-   * buttons on the Settings page are disabled.
-   */
-  enableUserManagement?: boolean;
-};
 
 export type GuardrailCapabilities = {
   /** Unlocks: aws-bedrock-guardrail */
@@ -168,6 +172,41 @@ declare global {
 }
 
 export const globalConfig: AppConfig = window.__RUNTIME_CONFIG__;
+
+/**
+ * Normalised base path: no trailing slash, leading slash when non-empty.
+ * "" when the console is served from the origin root.
+ */
+export const getBasePath = (): string => {
+  const trimmed = (globalConfig?.basePath ?? "").trim().replace(/^\/+|\/+$/g, "");
+  return trimmed ? `/${trimmed}` : "";
+};
+
+/**
+ * Prefix a router-relative path ("/org/x") with the base path for use in
+ * `window.location.assign`, `window.open`, `href` and anything else that
+ * bypasses react-router (which already applies the basename).
+ *
+ * The prefix is always applied: the input is a router route, never a browser
+ * pathname, so a route that happens to start with the base path (base `/login`,
+ * route `/login`) is still prefixed. `stripBasePath` is the inverse.
+ */
+export const withBasePath = (path: string): string => {
+  const base = getBasePath();
+  if (!base) return path;
+  return `${base}${path.startsWith("/") ? "" : "/"}${path}`;
+};
+
+/**
+ * Inverse of `withBasePath`: strip the base path from a browser pathname so it
+ * can be handed to react-router's `navigate`, which re-applies the basename.
+ */
+export const stripBasePath = (pathname: string): string => {
+  const base = getBasePath();
+  if (!base) return pathname;
+  if (pathname === base) return "/";
+  return pathname.startsWith(`${base}/`) ? pathname.slice(base.length) : pathname;
+};
 
 const buildRange = (duration: Duration) => {
   const endTime = new Date();

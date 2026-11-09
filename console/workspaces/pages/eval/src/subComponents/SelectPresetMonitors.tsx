@@ -45,6 +45,7 @@ import {
 } from "@wso2/oxygen-ui-icons-react";
 import {
   absoluteRouteMap,
+  withBasePath,
   type EvaluatorResponse,
   type MonitorEvaluator,
   type MonitorLLMProviderRef,
@@ -88,6 +89,7 @@ interface SelectPresetMonitorsProps {
   onHasLLMJudgeChange: (hasLLMJudge: boolean) => void;
   error?: string;
   llmProviderError?: string;
+  environmentName?: string;
 }
 
 export function SelectPresetMonitors({
@@ -99,6 +101,7 @@ export function SelectPresetMonitors({
   onHasLLMJudgeChange,
   error,
   llmProviderError,
+  environmentName,
 }: SelectPresetMonitorsProps) {
   const { orgId } = useParams<{ orgId: string }>();
   const [search, setSearch] = useState("");
@@ -430,17 +433,18 @@ export function SelectPresetMonitors({
     selectedEvaluatorNames,
   ]);
 
+  // Opened in a new tab via window.open, which bypasses the router basename.
   const createEvaluatorHref = orgId
-    ? generatePath(
+    ? withBasePath(generatePath(
         absoluteRouteMap.children.org.children.evaluators.children.create.path,
         { orgId },
-      )
+      ))
     : undefined;
 
   return (
-    <Form.Stack>
-      <Form.Section>
-        <Form.Header>
+    <Form.Stack spacing={3}>
+      <Stack spacing={2}>
+        <Box>
           <Stack spacing={0.5}>
             <Stack
               direction="row"
@@ -448,7 +452,7 @@ export function SelectPresetMonitors({
               justifyContent="space-between"
               spacing={1}
             >
-              Evaluators
+              <Typography variant="subtitle1">Evaluators</Typography>
               <Stack direction="row" alignItems="center" spacing={2}>
                 {selectedProviderName ? (
                   <Tooltip title="Change LLM provider" placement="top" arrow>
@@ -542,12 +546,12 @@ export function SelectPresetMonitors({
               </Typography>
             )}
           </Stack>
-        </Form.Header>
+        </Box>
         {selectedChipEvaluators.length > 0 && (
-          <Form.Section>
-            <Form.Header>
+          <Stack spacing={2}>
+            <Typography variant="subtitle1">
               Selected Evaluators ({selectedChipEvaluators.length})
-            </Form.Header>
+            </Typography>
             <Stack
               direction="row"
               spacing={2}
@@ -608,7 +612,7 @@ export function SelectPresetMonitors({
                 );
               })}
             </Stack>
-          </Form.Section>
+          </Stack>
         )}
         {!orgId && (
           <Alert severity="warning" sx={{ mt: 2 }}>
@@ -873,7 +877,7 @@ export function SelectPresetMonitors({
             {error}
           </Typography>
         )}
-      </Form.Section>
+      </Stack>
       <EvaluatorDetailsDrawer
         providerTemplate={selectedProviderTemplate}
         evaluator={drawerEvaluator}
@@ -892,6 +896,7 @@ export function SelectPresetMonitors({
         }}
         selectedProviderName={selectedProviderName}
         onProviderChange={handleProviderChange}
+        environmentName={environmentName}
       />
     </Form.Stack>
   );

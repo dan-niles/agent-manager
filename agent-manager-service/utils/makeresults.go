@@ -121,6 +121,7 @@ func convertToInternalAgentResponse(component *models.AgentResponse) spec.AgentR
 			SubType: &component.Type.SubType,
 		},
 		InputInterface: convertToInputInterface(component.InputInterface),
+		HealthChecks:   convertToHealthChecks(component.HealthChecks),
 		Build:          convertToBuild(component.Build),
 		Configurations: convertToConfigurations(component.Configurations),
 		KindName: func() *string {
@@ -253,9 +254,6 @@ func convertToExternalAgentResponse(component *models.AgentResponse) spec.AgentR
 		},
 		CreatedBy: convertToCreatedBy(component.CreatedBy),
 	}
-	if component.Type.SubType != "" {
-		response.AgentType.SubType = &component.Type.SubType
-	}
 	if len(component.Labels) > 0 {
 		response.SetLabels(component.Labels)
 	}
@@ -276,6 +274,8 @@ func ConvertToBuildResponse(build *models.BuildResponse) spec.BuildResponse {
 		BuildName:       build.Name,
 		EndedAt:         build.EndedAt,
 		BuildParameters: convertToBuildParameters(build.BuildParameters),
+		// The checks this build runs with wherever it is deployed; nil when it recorded none.
+		HealthChecks: convertToHealthChecks(build.HealthChecks),
 	}
 }
 
@@ -335,10 +335,40 @@ func ConvertToBuildDetailsResponse(buildDetails *models.BuildDetailsResponse) sp
 		DurationSeconds: &buildDetails.DurationSeconds,
 		EndedAt:         buildDetails.EndedAt,
 		BuildParameters: convertToBuildParameters(buildDetails.BuildParameters),
+		HealthChecks:    convertToHealthChecks(buildDetails.HealthChecks),
 		InputInterface:  convertToInputInterface(buildDetails.InputInterface),
 	}
 
 	return response
+}
+
+// convertToHealthChecks converts the saved health checks to the API response. Nil stays nil,
+// meaning none are saved.
+func convertToHealthChecks(healthChecks *models.HealthChecks) *spec.HealthChecks {
+	if healthChecks == nil {
+		return nil
+	}
+	return &spec.HealthChecks{
+		Startup:   convertToHealthCheck(healthChecks.Startup),
+		Readiness: convertToHealthCheck(healthChecks.Readiness),
+		Liveness:  convertToHealthCheck(healthChecks.Liveness),
+	}
+}
+
+func convertToHealthCheck(healthCheck *models.HealthCheck) *spec.HealthCheck {
+	if healthCheck == nil {
+		return nil
+	}
+	return &spec.HealthCheck{
+		Enabled:             healthCheck.Enabled,
+		Type:                healthCheck.Type,
+		Path:                healthCheck.Path,
+		Port:                healthCheck.Port,
+		InitialDelaySeconds: healthCheck.InitialDelaySeconds,
+		PeriodSeconds:       healthCheck.PeriodSeconds,
+		TimeoutSeconds:      healthCheck.TimeoutSeconds,
+		FailureThreshold:    healthCheck.FailureThreshold,
+	}
 }
 
 func convertToInputInterface(input *models.InputInterface) *spec.InputInterface {
@@ -421,18 +451,16 @@ func ConvertToDeploymentDetailsResponse(deploymentDetails []*models.DeploymentRe
 			envDisplayName = &deployment.EnvironmentDisplayName
 		}
 
-		var kindVersion *string
-		if deployment.KindVersion != "" {
-			kindVersion = &deployment.KindVersion
-		}
-
 		deploymentResponse := spec.DeploymentDetailsResponse{
 			ImageId:                deployment.ImageId,
 			Status:                 deployment.Status,
 			LastDeployed:           deployment.LastDeployedAt,
 			Endpoints:              endpoints,
 			EnvironmentDisplayName: envDisplayName,
-			KindVersion:            kindVersion,
+			KindVersion:            stringToPtr(deployment.KindVersion),
+			GatewayStatus:          stringToPtr(deployment.GatewayStatus),
+			GatewayStatusReason:    stringToPtr(deployment.GatewayStatusReason),
+			HealthChecks:           convertToHealthChecks(deployment.HealthChecks),
 		}
 
 		// Add to result map with environment name as key
@@ -544,6 +572,7 @@ func ConvertToOrganizationResponse(org *models.OrganizationResponse) spec.Organi
 		DisplayName: org.DisplayName,
 		Description: org.Description,
 		Namespace:   org.Namespace,
+		Handle:      stringToPtr(org.Handle),
 	}
 }
 
@@ -553,8 +582,10 @@ func ConvertToOrganizationListItems(org *models.OrganizationResponse) spec.Organ
 	}
 
 	return spec.OrganizationListItem{
-		Name:      org.Name,
-		CreatedAt: org.CreatedAt,
+		Name:        org.Name,
+		DisplayName: org.DisplayName,
+		Handle:      stringToPtr(org.Handle),
+		CreatedAt:   org.CreatedAt,
 	}
 }
 

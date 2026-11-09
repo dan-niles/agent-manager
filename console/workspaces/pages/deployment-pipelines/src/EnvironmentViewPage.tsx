@@ -18,6 +18,7 @@
 import {
   Alert,
   Avatar,
+  Button,
   Chip,
   Grid,
   IconButton,
@@ -27,11 +28,16 @@ import {
   Tooltip,
   Typography,
 } from "@wso2/oxygen-ui";
-import { AlertTriangle, Copy, DoorClosedLocked, KeyRound } from "@wso2/oxygen-ui-icons-react";
-import { formatDistanceToNow } from "date-fns";
+import { AlertTriangle, Copy, DoorClosedLocked, Edit, KeyRound } from "@wso2/oxygen-ui-icons-react";
+import {
+  useEnvironmentFeatures,
+  useFeatureFlag,
+  useGatewayFeatures,
+} from "@agent-management-platform/feature-management";
 import { generatePath, useNavigate, useParams } from "react-router-dom";
 import {
   copyToClipboard,
+  formatRelativeTime,
   GatewayTypeChip,
   getAvatarInitials,
   getErrorMessage,
@@ -76,6 +82,9 @@ const GATEWAY_AVATAR_SX = {
 export function EnvironmentViewPage() {
   const { orgId, envName } = useParams<{ orgId: string; envName: string }>();
   const navigate = useNavigate();
+  const { canWrite } = useEnvironmentFeatures();
+  // The gateway view route only exists when gateways are viewable.
+  const { canView: canViewGateway } = useGatewayFeatures();
   const { pushSnackBar } = useSnackBar();
 
   const { data: env, isLoading: isLoadingEnv, error: envError } = useGetEnvironment({
@@ -94,8 +103,12 @@ export function EnvironmentViewPage() {
 
   const gateways = gatewaysData?.gateways ?? [];
 
+  // Thunder Id is part of the Agent ID feature set; skip the fetch entirely when
+  // the flag is off so the hidden section costs nothing.
+  const agentIdEnabled = useFeatureFlag("enableAgentIdentity");
+
   const { data: thunderInstancesData, isLoading: isLoadingProviders } =
-    useListThunderInstances({ orgName: orgId });
+    useListThunderInstances({ orgName: agentIdEnabled ? orgId : undefined });
   const thunderInstance = thunderInstancesData?.thunderInstances.find(
     (i) => i.envName === envName,
   );
@@ -116,14 +129,35 @@ export function EnvironmentViewPage() {
     <PageLayout
       title={displayName}
       backHref={backHref}
-      backLabel="Back to Environments"
+      backLabel="Back to environments"
       description={
         env?.createdAt
-          ? `Created ${formatDistanceToNow(new Date(env.createdAt), { addSuffix: true })}`
+          ? `Created ${formatRelativeTime(env.createdAt)}`
           : undefined
       }
       isLoading={isLoadingEnv}
       disableIcon
+      actions={
+        canWrite && (
+        <Button
+          variant="outlined"
+          size="small"
+          startIcon={<Edit size={16} />}
+          disabled={!env}
+          onClick={() =>
+            navigate(
+              generatePath(
+                absoluteRouteMap.children.org.children.environments.children.view
+                  .children.edit.path,
+                { orgId: orgId ?? "", envName: envName ?? "" },
+              ),
+            )
+          }
+        >
+          Edit environment
+        </Button>
+        )
+      }
       titleTail={
         env ? (
           <Stack direction="row" alignItems="center" spacing={1}>
@@ -230,15 +264,19 @@ export function EnvironmentViewPage() {
                       <ListingTable.Row
                         key={gw.uuid}
                         variant="table"
-                        hover
-                        clickable
-                        onClick={() =>
-                          navigate(
-                            generatePath(
-                              absoluteRouteMap.children.org.children.gateways.children.view.path,
-                              { orgId: orgId ?? "", gatewayId: gw.uuid },
-                            ),
-                          )
+                        hover={canViewGateway}
+                        clickable={canViewGateway}
+                        onClick={
+                          canViewGateway
+                            ? () =>
+                                navigate(
+                                  generatePath(
+                                    absoluteRouteMap.children.org.children.gateways.children.view
+                                      .path,
+                                    { orgId: orgId ?? "", gatewayId: gw.uuid },
+                                  ),
+                                )
+                            : undefined
                         }
                       >
                         <ListingTable.Cell>
@@ -278,6 +316,7 @@ export function EnvironmentViewPage() {
             )}
           </Stack>
 
+          {agentIdEnabled && (
           <Stack spacing={1.5}>
             <Typography variant="overline" color="text.secondary">
               Identity Providers
@@ -369,6 +408,7 @@ export function EnvironmentViewPage() {
               </ListingTable.Container>
             )}
           </Stack>
+          )}
         </Stack>
       )}
     </PageLayout>

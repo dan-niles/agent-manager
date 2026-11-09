@@ -51,6 +51,8 @@ import {
   Typography,
 } from "@wso2/oxygen-ui";
 import { ChevronDown, Info } from "@wso2/oxygen-ui-icons-react";
+import { isExternalAgent, servesA2A } from "@agent-management-platform/views";
+import { ConfigSection } from "@agent-management-platform/shared-component";
 import {
   forwardRef,
   useEffect,
@@ -60,6 +62,7 @@ import {
 } from "react";
 import {
   AgentCardCorsSection,
+  agentCardCorsSummary,
   cardDraftFromConfig,
   cardDraftToPayload,
   isCardDraftInvalid,
@@ -124,12 +127,15 @@ export const SecurityConfigSections = forwardRef<SecurityConfigHandle, SecurityC
     // GetAgent is used only for the env-independent agent type; CORS + Auth are seeded from the
     // env-scoped `configurations` prop below.
     const { data: agent } = useGetAgent({ orgName, projName, agentName });
-    const isApiAgent = agent?.agentType?.type === "agent-api";
-    const isA2AAgent = agent?.agentType?.subType === "a2a-agent";
+    // A proxied external agent takes inbound auth and CORS at the gateway, like an API agent.
+    const hasGatewayPolicies = agent?.agentType?.type === "agent-api" || isExternalAgent(agent);
+    const isA2AAgent = servesA2A(agent);
+    // A proxied external agent is a third-party origin, so it never receives our IdP's tokens.
+    const canForwardToken = !isExternalAgent(agent);
 
     const { data: idpResp } = useListEnvironmentIdentityProviders({
       orgName,
-      environmentId: open && isApiAgent ? environment : undefined,
+      environmentId: open && hasGatewayPolicies ? environment : undefined,
     });
     const identityProviderOptions = useMemo(
       () => (idpResp?.list ?? []).map((p) => p.name),
@@ -224,17 +230,18 @@ export const SecurityConfigSections = forwardRef<SecurityConfigHandle, SecurityC
       configurations?.oauthConfig,
     ]);
 
+    const forwardToken = canForwardToken && oauthForwardToken;
     const hasWildcardOrigin = corsAllowAll || corsOrigins.includes("*");
     const editableCorsHeaders = isA2AAgent
       ? corsHeaders.filter((header) => !isA2AVersionHeader(header))
       : corsHeaders;
     const cardInvalid = isA2AAgent && isCardDraftInvalid(cardDraft);
-    const oauthInvalid = isApiAgent && authMode === "oauth" && oauthIssuers.length === 0;
+    const oauthInvalid = hasGatewayPolicies && authMode === "oauth" && oauthIssuers.length === 0;
 
     const resilienceTimeoutSeconds = timeoutUnit === "minutes"
       ? Number(timeoutDuration) * 60
       : Number(timeoutDuration);
-    const timeoutInvalid = isApiAgent && !isA2AAgent && (
+    const timeoutInvalid = hasGatewayPolicies && !isA2AAgent && (
       timeoutDuration.trim() === ""
       || !Number.isFinite(resilienceTimeoutSeconds)
       || !Number.isInteger(resilienceTimeoutSeconds)
@@ -258,7 +265,7 @@ export const SecurityConfigSections = forwardRef<SecurityConfigHandle, SecurityC
       () => ({
         validate: () => !oauthInvalid && !timeoutInvalid && !cardInvalid,
         buildBody: () => {
-          if (!isApiAgent) return {};
+          if (!hasGatewayPolicies) return {};
           return {
             enableApiKeySecurity: authMode === "apikey",
             enableOAuthSecurity: authMode === "oauth",
@@ -268,7 +275,7 @@ export const SecurityConfigSections = forwardRef<SecurityConfigHandle, SecurityC
                 audiences: oauthAudiences,
                 headerName: oauthHeaderName.trim() || "Authorization",
                 authHeaderPrefix: oauthHeaderPrefix.trim() || "Bearer",
-                forwardToken: oauthForwardToken,
+                forwardToken,
               },
             }),
             corsConfig: {
@@ -288,20 +295,219 @@ export const SecurityConfigSections = forwardRef<SecurityConfigHandle, SecurityC
         },
       }),
       [
-        isApiAgent, oauthInvalid, authMode, oauthIssuers, oauthAudiences, oauthHeaderName,
-        oauthHeaderPrefix, oauthForwardToken, corsEnabled, corsOrigins, corsMethods,
+        hasGatewayPolicies, oauthInvalid, authMode, oauthIssuers, oauthAudiences, oauthHeaderName,
+        oauthHeaderPrefix, forwardToken, corsEnabled, corsOrigins, corsMethods,
         corsAllowCredentials, hasWildcardOrigin, timeoutInvalid,
         resilienceTimeoutSeconds, isA2AAgent, editableCorsHeaders, cardDraft, cardInvalid,
       ],
     );
 
-    if (!isApiAgent) return null;
+    // What each closed section shows on the right of its heading.
+    const authSummary = authMode === "oauth" ? "OAuth" : authMode === "apikey" ? "API key" : "None";
+    // A "*" in the origins list allows all origins too, as the saved policy does.
+    const corsSummary = !corsEnabled
+      ? "Off"
+      : hasWildcardOrigin
+        ? "On · all origins"
+        : `On · ${corsOrigins.length} origin${corsOrigins.length === 1 ? "" : "s"}`;
+    const timeoutSummary = `${timeoutDuration} ${timeoutUnit}`;
+
+    if (!hasGatewayPolicies) return null;
 
     return (
       <>
+        {/* ── Endpoint Authentication ──────────────────────────────── */}
+        <ConfigSection title="Endpoint Authentication" summary={authSummary} hasError={oauthInvalid}>
+          <Form.Subheader>
+            Choose how callers authenticate against this agent endpoint.
+          </Form.Subheader>
+          <Form.Stack spacing={1}>
+            <FormControl>
+              <RadioGroup
+                value={authMode}
+                onChange={(_, value) => {
+                  const mode = value as "none" | "apikey" | "oauth";
+                  setAuthMode(mode);
+                  if (mode === "oauth" && oauthIssuers.length === 0 && hasIdentityProviders) {
+                    setOauthIssuers(identityProviderOptions);
+                  }
+                }}
+              >
+                <FormControlLabel
+                  value="none"
+                  control={<Radio disabled={disabled} />}
+                  label="No authentication"
+                />
+                <FormControlLabel
+                  value="apikey"
+                  control={<Radio disabled={disabled} />}
+                  label="API key"
+                />
+                <FormControlLabel
+                  value="oauth"
+                  control={<Radio disabled={disabled || !hasIdentityProviders} />}
+                  label={
+                    hasIdentityProviders
+                      ? "OAuth"
+                      : "OAuth — configure an identity provider first"
+                  }
+                />
+              </RadioGroup>
+            </FormControl>
+
+            {isA2AAgent && authMode === "none" && (
+              <Alert severity="warning">
+                <Typography variant="caption">
+                  This agent can be called by anyone who can reach the gateway, and the extended
+                  Agent Card (GetExtendedAgentCard) will always return 401.
+                </Typography>
+              </Alert>
+            )}
+
+            <Collapse in={authMode === "apikey"}>
+              <FormControl fullWidth sx={{ mt: 1 }}>
+                <FormLabel>Header</FormLabel>
+                <TextField value="X-API-Key" size="small" fullWidth disabled />
+              </FormControl>
+            </Collapse>
+
+            <Collapse in={authMode === "oauth"}>
+              <Form.Stack spacing={2} sx={{ mt: 1 }}>
+                {!hasIdentityProviders && (
+                  <Alert severity="warning">
+                    <Typography variant="caption">
+                      No identity providers for this environment. Add one under Security &rarr;
+                      Identity Providers first.
+                    </Typography>
+                  </Alert>
+                )}
+                <FormControl fullWidth error={oauthInvalid}>
+                  <FormLabel>Identity Providers</FormLabel>
+                  <Autocomplete
+                    multiple
+                    options={identityProviderOptions}
+                    value={oauthIssuers}
+                    onChange={(_, v) => setOauthIssuers(v as string[])}
+                    disabled={disabled || !hasIdentityProviders}
+                    renderTags={(vals, getTagProps) =>
+                      vals.map((opt, i) => (
+                        <Chip
+                          label={opt as string}
+                          size="small"
+                          {...getTagProps({ index: i })}
+                          key={opt as string}
+                        />
+                      ))
+                    }
+                    renderInput={(params) => (
+                      <TextField
+                        {...params}
+                        size="small"
+                        error={oauthInvalid}
+                        placeholder={oauthIssuers.length === 0 ? "Select identity providers" : ""}
+                      />
+                    )}
+                  />
+                  {oauthInvalid && (
+                    <FormHelperText>Select at least one identity provider.</FormHelperText>
+                  )}
+                </FormControl>
+
+                <FormControl fullWidth>
+                  <FormLabel>Audiences</FormLabel>
+                  <Autocomplete
+                    multiple
+                    freeSolo
+                    options={[]}
+                    value={oauthAudiences}
+                    onChange={(_, v) => setOauthAudiences(v as string[])}
+                    disabled={disabled}
+                    renderTags={(vals, getTagProps) =>
+                      vals.map((opt, i) => (
+                        <Chip
+                          label={opt as string}
+                          size="small"
+                          {...getTagProps({ index: i })}
+                          key={opt as string}
+                        />
+                      ))
+                    }
+                    renderInput={(params) => (
+                      <TextField
+                        {...params}
+                        size="small"
+                        placeholder={
+                          oauthAudiences.length === 0 ? "Add accepted audience (aud) values" : ""
+                        }
+                      />
+                    )}
+                  />
+                  <FormHelperText>
+                    Accepted token audiences (aud claim). Leave empty to disable audience
+                    validation.
+                  </FormHelperText>
+                </FormControl>
+
+                <Box display="flex" gap={2}>
+                  <FormControl fullWidth>
+                    <FormLabel>Header name</FormLabel>
+                    <TextField
+                      slotProps={{ htmlInput: { maxLength: INPUT_LIMITS.KEY } }}
+                      size="small"
+                      fullWidth
+                      value={oauthHeaderName}
+                      disabled={disabled}
+                      onChange={(e) => setOauthHeaderName(e.target.value)}
+                      placeholder="Authorization"
+                    />
+                  </FormControl>
+                  <FormControl fullWidth>
+                    <FormLabel>Auth header prefix</FormLabel>
+                    <TextField
+                      slotProps={{ htmlInput: { maxLength: INPUT_LIMITS.VALUE } }}
+                      size="small"
+                      fullWidth
+                      value={oauthHeaderPrefix}
+                      disabled={disabled}
+                      onChange={(e) => setOauthHeaderPrefix(e.target.value)}
+                      placeholder="Bearer"
+                    />
+                  </FormControl>
+                </Box>
+
+                <FormControlLabel
+                  control={
+                    <Switch
+                      checked={forwardToken}
+                      onChange={(_, checked) => setOauthForwardToken(checked)}
+                      disabled={disabled || !canForwardToken}
+                    />
+                  }
+                  label={
+                    <Box display="flex" alignItems="center" gap={0.5}>
+                      Forward token to upstream
+                      <Tooltip
+                        title={`Sent to upstream as ${FORWARDED_TOKEN_HEADER} (original header removed).`}
+                      >
+                        <Box display="flex" color="text.secondary">
+                          <Info size={14} />
+                        </Box>
+                      </Tooltip>
+                    </Box>
+                  }
+                />
+                <Typography variant="caption" color="text.secondary" sx={{ mt: -1 }}>
+                  {canForwardToken
+                    ? "Forward the token header to the upstream service after validation. Disable to strip it before proxying."
+                    : "The token is never forwarded to an external agent. It is stripped after validation."}
+                </Typography>
+              </Form.Stack>
+            </Collapse>
+          </Form.Stack>
+        </ConfigSection>
+
         {/* ── CORS ─────────────────────────────────────────────────── */}
-        <Form.Section>
-          <Form.Header>CORS Configuration</Form.Header>
+        <ConfigSection title="CORS Configuration" summary={corsSummary}>
           <Form.Subheader>
             Control which origins, methods, and headers may access this endpoint.
           </Form.Subheader>
@@ -461,204 +667,20 @@ export const SecurityConfigSections = forwardRef<SecurityConfigHandle, SecurityC
               </Accordion>
             </Collapse>
           </Form.Stack>
-        </Form.Section>
+        </ConfigSection>
 
         {isA2AAgent && (
-          <AgentCardCorsSection draft={cardDraft} onChange={setCardDraft} disabled={disabled} />
+          <ConfigSection
+            title="Agent Card CORS"
+            summary={agentCardCorsSummary(cardDraft)}
+            hasError={cardInvalid}
+          >
+            <AgentCardCorsSection draft={cardDraft} onChange={setCardDraft} disabled={disabled} />
+          </ConfigSection>
         )}
 
-        {/* ── Endpoint Authentication ──────────────────────────────── */}
-        <Form.Section>
-          <Form.Header>Endpoint Authentication</Form.Header>
-          <Form.Subheader>
-            Choose how callers authenticate against this agent endpoint.
-          </Form.Subheader>
-          <Form.Stack spacing={1}>
-            <FormControl>
-              <RadioGroup
-                value={authMode}
-                onChange={(_, value) => {
-                  const mode = value as "none" | "apikey" | "oauth";
-                  setAuthMode(mode);
-                  if (mode === "oauth" && oauthIssuers.length === 0 && hasIdentityProviders) {
-                    setOauthIssuers(identityProviderOptions);
-                  }
-                }}
-              >
-                <FormControlLabel
-                  value="none"
-                  control={<Radio disabled={disabled} />}
-                  label="No authentication"
-                />
-                <FormControlLabel
-                  value="apikey"
-                  control={<Radio disabled={disabled} />}
-                  label="API key"
-                />
-                <FormControlLabel
-                  value="oauth"
-                  control={<Radio disabled={disabled || !hasIdentityProviders} />}
-                  label={
-                    hasIdentityProviders
-                      ? "OAuth"
-                      : "OAuth — configure an identity provider first"
-                  }
-                />
-              </RadioGroup>
-            </FormControl>
-
-            {isA2AAgent && authMode === "none" && (
-              <Alert severity="warning">
-                <Typography variant="caption">
-                  This agent can be called by anyone who can reach the gateway, and the extended
-                  Agent Card (GetExtendedAgentCard) will always return 401.
-                </Typography>
-              </Alert>
-            )}
-
-            <Collapse in={authMode === "apikey"}>
-              <FormControl fullWidth sx={{ mt: 1 }}>
-                <FormLabel>Header</FormLabel>
-                <TextField value="X-API-Key" size="small" fullWidth disabled />
-              </FormControl>
-            </Collapse>
-
-            <Collapse in={authMode === "oauth"}>
-              <Form.Stack spacing={2} sx={{ mt: 1 }}>
-                {!hasIdentityProviders && (
-                  <Alert severity="warning">
-                    <Typography variant="caption">
-                      No identity providers for this environment. Add one under Security &rarr;
-                      Identity Providers first.
-                    </Typography>
-                  </Alert>
-                )}
-                <FormControl fullWidth error={oauthInvalid}>
-                  <FormLabel required>Identity Providers</FormLabel>
-                  <Autocomplete
-                    multiple
-                    options={identityProviderOptions}
-                    value={oauthIssuers}
-                    onChange={(_, v) => setOauthIssuers(v as string[])}
-                    disabled={disabled || !hasIdentityProviders}
-                    renderTags={(vals, getTagProps) =>
-                      vals.map((opt, i) => (
-                        <Chip
-                          label={opt as string}
-                          size="small"
-                          {...getTagProps({ index: i })}
-                          key={opt as string}
-                        />
-                      ))
-                    }
-                    renderInput={(params) => (
-                      <TextField
-                        {...params}
-                        size="small"
-                        error={oauthInvalid}
-                        placeholder={oauthIssuers.length === 0 ? "Select identity providers" : ""}
-                      />
-                    )}
-                  />
-                  {oauthInvalid && (
-                    <FormHelperText>Select at least one identity provider.</FormHelperText>
-                  )}
-                </FormControl>
-
-                <FormControl fullWidth>
-                  <FormLabel>Audiences</FormLabel>
-                  <Autocomplete
-                    multiple
-                    freeSolo
-                    options={[]}
-                    value={oauthAudiences}
-                    onChange={(_, v) => setOauthAudiences(v as string[])}
-                    disabled={disabled}
-                    renderTags={(vals, getTagProps) =>
-                      vals.map((opt, i) => (
-                        <Chip
-                          label={opt as string}
-                          size="small"
-                          {...getTagProps({ index: i })}
-                          key={opt as string}
-                        />
-                      ))
-                    }
-                    renderInput={(params) => (
-                      <TextField
-                        {...params}
-                        size="small"
-                        placeholder={
-                          oauthAudiences.length === 0 ? "Add accepted audience (aud) values" : ""
-                        }
-                      />
-                    )}
-                  />
-                  <FormHelperText>
-                    Accepted token audiences (aud claim). Leave empty to disable audience
-                    validation.
-                  </FormHelperText>
-                </FormControl>
-
-                <Box display="flex" gap={2}>
-                  <FormControl fullWidth>
-                    <FormLabel>Header name</FormLabel>
-                    <TextField
-                      slotProps={{ htmlInput: { maxLength: INPUT_LIMITS.KEY } }}
-                      size="small"
-                      fullWidth
-                      value={oauthHeaderName}
-                      disabled={disabled}
-                      onChange={(e) => setOauthHeaderName(e.target.value)}
-                      placeholder="Authorization"
-                    />
-                  </FormControl>
-                  <FormControl fullWidth>
-                    <FormLabel>Auth header prefix</FormLabel>
-                    <TextField
-                      slotProps={{ htmlInput: { maxLength: INPUT_LIMITS.VALUE } }}
-                      size="small"
-                      fullWidth
-                      value={oauthHeaderPrefix}
-                      disabled={disabled}
-                      onChange={(e) => setOauthHeaderPrefix(e.target.value)}
-                      placeholder="Bearer"
-                    />
-                  </FormControl>
-                </Box>
-
-                <FormControlLabel
-                  control={
-                    <Switch
-                      checked={oauthForwardToken}
-                      onChange={(_, checked) => setOauthForwardToken(checked)}
-                      disabled={disabled}
-                    />
-                  }
-                  label={
-                    <Box display="flex" alignItems="center" gap={0.5}>
-                      Forward token to upstream
-                      <Tooltip
-                        title={`Sent to upstream as ${FORWARDED_TOKEN_HEADER} (original header removed).`}
-                      >
-                        <Box display="flex" color="text.secondary">
-                          <Info size={14} />
-                        </Box>
-                      </Tooltip>
-                    </Box>
-                  }
-                />
-                <Typography variant="caption" color="text.secondary" sx={{ mt: -1 }}>
-                  Forward the token header to the upstream service after validation. Disable to
-                  strip it before proxying.
-                </Typography>
-              </Form.Stack>
-            </Collapse>
-          </Form.Stack>
-        </Form.Section>
         {!isA2AAgent && (
-          <Form.Section>
-            <Form.Header>Request Timeout</Form.Header>
+          <ConfigSection title="Request Timeout" summary={timeoutSummary} hasError={timeoutInvalid}>
             <Form.Subheader>
               Maximum duration an active connection can stay open between the agent and client
             </Form.Subheader>
@@ -700,7 +722,7 @@ export const SecurityConfigSections = forwardRef<SecurityConfigHandle, SecurityC
                 </FormControl>
               </Grid>
             </Grid>
-          </Form.Section>
+          </ConfigSection>
         )}
       </>
     );

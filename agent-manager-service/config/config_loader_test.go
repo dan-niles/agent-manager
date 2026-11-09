@@ -24,6 +24,21 @@ import (
 	"testing"
 )
 
+func TestValidateIdentityManagementMode(t *testing.T) {
+	for _, mode := range []string{"LEGACY_DIRECT", "CP_MANAGED"} {
+		r := &configReader{}
+		validateIdentityManagementMode(&Config{IdentityManagementMode: mode}, r)
+		if len(r.errors) != 0 {
+			t.Fatalf("mode %q: unexpected errors: %v", mode, r.errors)
+		}
+	}
+	r := &configReader{}
+	validateIdentityManagementMode(&Config{IdentityManagementMode: "MIXED"}, r)
+	if len(r.errors) != 1 {
+		t.Fatalf("expected one validation error, got %v", r.errors)
+	}
+}
+
 func TestThunderConfigResolvedSystemResourceIdentifier(t *testing.T) {
 	tests := []struct {
 		name string
@@ -546,7 +561,7 @@ func TestValidateSecretManagerConfig(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			cfg := &Config{SecretManager: SecretManagerConfig{AgentIdentityRefreshInterval: tc.interval}}
+			cfg := &Config{SecretManager: SecretManagerConfig{AgentIdentityRefreshInterval: tc.interval, AgentIdentityForceSyncWait: "20s", AgentIdentityForceSyncApplyTimeout: "2m"}}
 			r := &configReader{}
 			validateSecretManagerConfig(cfg, r)
 
@@ -1098,4 +1113,148 @@ func TestValidateOpenChoreoBuildWorkflowKind(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestValidateDeploymentTimeoutConfig(t *testing.T) {
+	tests := []struct {
+		name        string
+		cfg         DeploymentTimeoutConfig
+		wantErrors  int
+		errContains string
+	}{
+		{name: "defaults accepted", cfg: DeploymentTimeoutConfig{SweepIntervalSeconds: 60, TimeoutSeconds: 300}},
+		{
+			name:        "zero sweep interval rejected",
+			cfg:         DeploymentTimeoutConfig{SweepIntervalSeconds: 0, TimeoutSeconds: 300},
+			wantErrors:  1,
+			errContains: "DEPLOYMENT_TIMEOUT_SWEEP_INTERVAL_SECONDS",
+		},
+		{
+			name:        "negative timeout rejected",
+			cfg:         DeploymentTimeoutConfig{SweepIntervalSeconds: 60, TimeoutSeconds: -1},
+			wantErrors:  1,
+			errContains: "DEPLOYMENT_TIMEOUT_SECONDS",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			r := &configReader{}
+			validateDeploymentTimeoutConfig(&Config{DeploymentTimeout: tc.cfg}, r)
+			if len(r.errors) != tc.wantErrors {
+				t.Fatalf("got %d errors (%v), want %d", len(r.errors), r.errors, tc.wantErrors)
+			}
+			if tc.errContains != "" && !strings.Contains(r.errors[0].Error(), tc.errContains) {
+				t.Errorf("error %q does not mention %q", r.errors[0], tc.errContains)
+			}
+		})
+	}
+}
+
+func TestValidateReconcileConfig(t *testing.T) {
+	valid := ReconcileConfig{
+		RenderIntervalSeconds: 5, PlaceIntervalSeconds: 600, DriftIntervalSeconds: 300,
+		RenderLeaseSeconds: 120, RenderAttemptBudget: 30,
+	}
+	r := &configReader{}
+	validateReconcileConfig(&Config{Reconcile: valid}, r)
+	if len(r.errors) != 0 {
+		t.Fatalf("defaults rejected: %v", r.errors)
+	}
+
+	zeroBudget := valid
+	zeroBudget.RenderAttemptBudget = 0
+	r = &configReader{}
+	validateReconcileConfig(&Config{Reconcile: zeroBudget}, r)
+	if len(r.errors) != 1 || !strings.Contains(r.errors[0].Error(), "RECONCILE_RENDER_ATTEMPT_BUDGET") {
+		t.Fatalf("got %v, want one RECONCILE_RENDER_ATTEMPT_BUDGET error", r.errors)
+	}
+}
+
+func TestRequirePositiveReportsEachNonPositiveField(t *testing.T) {
+	r := &configReader{}
+	requirePositive(r, positiveField{"A", 1}, positiveField{"B", 0}, positiveField{"C", -2})
+
+	want := []string{"B must be greater than 0, got 0", "C must be greater than 0, got -2"}
+	if len(r.errors) != len(want) {
+		t.Fatalf("got %v, want %v", r.errors, want)
+	}
+	for i, msg := range want {
+		if r.errors[i].Error() != msg {
+			t.Errorf("error %d = %q, want %q", i, r.errors[i], msg)
+		}
+	}
+}
+
+func TestValidateSecretManagerConfig_ForceSyncWait(t *testing.T) {
+	for _, tc := range []struct {
+		wait    string
+		wantErr bool
+	}{{"20s", false}, {"1m", false}, {"bad", true}, {"0s", true}, {"-1s", true}} {
+		for _, name := range []string{"AGENT_IDENTITY_FORCE_SYNC_WAIT", "AGENT_IDENTITY_FORCE_SYNC_APPLY_TIMEOUT"} {
+			sm := SecretManagerConfig{AgentIdentityRefreshInterval: "15s", AgentIdentityForceSyncWait: "20s", AgentIdentityForceSyncApplyTimeout: "2m"}
+			if name == "AGENT_IDENTITY_FORCE_SYNC_WAIT" {
+				sm.AgentIdentityForceSyncWait = tc.wait
+			} else {
+				sm.AgentIdentityForceSyncApplyTimeout = tc.wait
+			}
+			r := &configReader{}
+			validateSecretManagerConfig(&Config{SecretManager: sm}, r)
+			if (len(r.errors) > 0) != tc.wantErr {
+				t.Errorf("%s %q: wantErr=%v got %v", name, tc.wait, tc.wantErr, r.errors)
+			}
+			if tc.wantErr && (len(r.errors) != 1 || !strings.Contains(r.errors[0].Error(), name)) {
+				t.Errorf("%s %q: expected one error naming the variable, got %v", name, tc.wait, r.errors)
+			}
+		}
+	}
+}
+
+func TestLoadEnvs_AgentIdentityForceSyncWait(t *testing.T) {
+	for k, v := range map[string]string{
+		"OPEN_CHOREO_BASE_URL": "http://localhost/api/v1",
+		"DB_HOST":              "localhost",
+		"DB_USER":              "unit",
+		"DB_PASSWORD":          "unit",
+		"DB_NAME":              "unit",
+	} {
+		t.Setenv(k, v)
+	}
+
+	t.Run("periodic fallback defaults to 10m", func(t *testing.T) {
+		t.Setenv("AGENT_IDENTITY_REFRESH_INTERVAL", "")
+		loadEnvs()
+		if got := config.SecretManager.AgentIdentityRefreshInterval; got != "10m" {
+			t.Errorf("AgentIdentityRefreshInterval = %q, want 10m", got)
+		}
+	})
+
+	t.Run("defaults to 20s", func(t *testing.T) {
+		t.Setenv("AGENT_IDENTITY_FORCE_SYNC_WAIT", "")
+		loadEnvs()
+		if got := config.SecretManager.AgentIdentityForceSyncWait; got != "20s" {
+			t.Errorf("AgentIdentityForceSyncWait = %q, want 20s", got)
+		}
+	})
+
+	t.Run("override is honored", func(t *testing.T) {
+		t.Setenv("AGENT_IDENTITY_FORCE_SYNC_WAIT", "45s")
+		loadEnvs()
+		if got := config.SecretManager.AgentIdentityForceSyncWait; got != "45s" {
+			t.Errorf("AgentIdentityForceSyncWait = %q, want 45s", got)
+		}
+	})
+
+	t.Run("apply timeout defaults to 2m and can be overridden", func(t *testing.T) {
+		t.Setenv("AGENT_IDENTITY_FORCE_SYNC_APPLY_TIMEOUT", "")
+		loadEnvs()
+		if got := config.SecretManager.AgentIdentityForceSyncApplyTimeout; got != "2m" {
+			t.Errorf("AgentIdentityForceSyncApplyTimeout = %q, want 2m", got)
+		}
+		t.Setenv("AGENT_IDENTITY_FORCE_SYNC_APPLY_TIMEOUT", "5m")
+		loadEnvs()
+		if got := config.SecretManager.AgentIdentityForceSyncApplyTimeout; got != "5m" {
+			t.Errorf("AgentIdentityForceSyncApplyTimeout = %q, want 5m", got)
+		}
+	})
 }

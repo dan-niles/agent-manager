@@ -57,8 +57,9 @@ type AgentThunderClient struct {
 	ProvisioningType AgentProvisioningType `gorm:"column:provisioning_type;not null"`
 	ThunderAgentID   string                `gorm:"column:thunder_agent_id;not null;default:''"`
 	ThunderClientID  string                `gorm:"column:thunder_client_id;not null;default:''"`
-	// SecretRefPath is the OpenBao KV path holding the credential (internal agents only).
-	// Read directly by services.AgentIdentityInjectionService.
+	// SecretRefPath stores the provider-managed SecretReference name for the
+	// credential (internal agents only). The column name is retained for schema
+	// compatibility.
 	SecretRefPath string             `gorm:"column:secret_ref_path;not null;default:''"`
 	Status        AgentThunderStatus `gorm:"column:status;not null;default:'pending'"`
 	// RequestedBy is the calling user's own subject (from AMS's existing
@@ -73,8 +74,19 @@ type AgentThunderClient struct {
 	LastError       string     `gorm:"column:last_error;not null;default:''"`
 	LastAttemptedAt *time.Time `gorm:"column:last_attempted_at"`
 	NextRetryAt     *time.Time `gorm:"column:next_retry_at"`
-	CreatedAt       time.Time  `gorm:"column:created_at;not null;default:NOW()"`
-	UpdatedAt       time.Time  `gorm:"column:updated_at;not null;default:NOW()"`
+	// PromotionSource names the environment this binding's identity is promoted
+	// from, for an environment whose identity is created by promotion into it.
+	// Empty means the identity is created directly in this environment. The
+	// reconciler promotes from here only once that environment's own binding is
+	// completed, which orders a pipeline's promotions.
+	PromotionSource string `gorm:"column:promotion_source;not null;default:''"`
+	// SyncAfter is when the carried set of a promoted binding is re-promoted: the
+	// agent's roles, groups or MCP resource servers changed after the binding was
+	// completed. A later change moves it later, so a burst of changes is one
+	// promotion. Nil means nothing is waiting.
+	SyncAfter *time.Time `gorm:"column:sync_after"`
+	CreatedAt time.Time  `gorm:"column:created_at;not null;default:NOW()"`
+	UpdatedAt time.Time  `gorm:"column:updated_at;not null;default:NOW()"`
 }
 
 func (AgentThunderClient) TableName() string { return "agent_thunder_clients" }

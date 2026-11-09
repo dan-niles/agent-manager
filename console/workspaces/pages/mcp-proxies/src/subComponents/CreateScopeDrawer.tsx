@@ -38,6 +38,7 @@ import {
 } from "@agent-management-platform/views";
 import { useAuthHooks } from "@agent-management-platform/auth";
 import {
+  environmentLabel,
   useConfirmIfUnsaved,
   useUnsavedChangesGuard,
 } from "@agent-management-platform/shared-component";
@@ -314,7 +315,7 @@ export function CreateScopeDrawer({
             </Typography>
 
             <FormControl fullWidth error={Boolean(errors.name)}>
-              <FormLabel required>Name</FormLabel>
+              <FormLabel>Name</FormLabel>
               <TextField
                 slotProps={{ htmlInput: { maxLength: INPUT_LIMITS.NAME } }}
                 fullWidth
@@ -415,7 +416,7 @@ export function CreateScopeDrawer({
                 environments.map((env, index) => (
                   <FormControl fullWidth key={env.id ?? env.name}>
                     <FormLabel sx={{ fontSize: "0.8125rem" }}>
-                      {env.displayName ?? env.name}
+                      {environmentLabel(env)}
                     </FormLabel>
                     <Autocomplete
                       multiple
@@ -471,7 +472,7 @@ export function CreateScopeDrawer({
                 color="primary"
                 disabled={!isValid || isSubmitting}
               >
-                {isSubmitting ? "Creating..." : "Create Scope"}
+                {isSubmitting ? "Creating..." : "Create scope"}
               </Button>
             </Box>
           </Stack>

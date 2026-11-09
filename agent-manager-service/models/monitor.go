@@ -118,17 +118,18 @@ func (m *Monitor) ToResponse(status MonitorStatus, latestRun *MonitorRunResponse
 
 // MonitorRun is the GORM model for the monitor_runs table
 type MonitorRun struct {
-	ID           uuid.UUID          `gorm:"column:id;primaryKey;type:uuid;default:gen_random_uuid()"`
-	MonitorID    uuid.UUID          `gorm:"column:monitor_id;not null"`
-	Name         string             `gorm:"column:name;not null"` // WorkflowRun name for querying OpenChoreo API
-	Evaluators   []MonitorEvaluator `gorm:"column:evaluators;type:jsonb;serializer:json;not null;default:'[]'"`
-	TraceStart   time.Time          `gorm:"column:trace_start;not null"`
-	TraceEnd     time.Time          `gorm:"column:trace_end;not null"`
-	StartedAt    *time.Time         `gorm:"column:started_at"`
-	CompletedAt  *time.Time         `gorm:"column:completed_at"`
-	Status       string             `gorm:"column:status;not null;default:'pending'"`
-	ErrorMessage *string            `gorm:"column:error_message"`
-	CreatedAt    time.Time          `gorm:"column:created_at;not null;default:NOW()"`
+	EventQueuedAt *time.Time         `gorm:"column:event_queued_at"`
+	ID            uuid.UUID          `gorm:"column:id;primaryKey;type:uuid;default:gen_random_uuid()"`
+	MonitorID     uuid.UUID          `gorm:"column:monitor_id;not null"`
+	Name          string             `gorm:"column:name;not null"` // WorkflowRun name for querying OpenChoreo API
+	Evaluators    []MonitorEvaluator `gorm:"column:evaluators;type:jsonb;serializer:json;not null;default:'[]'"`
+	TraceStart    time.Time          `gorm:"column:trace_start;not null"`
+	TraceEnd      time.Time          `gorm:"column:trace_end;not null"`
+	StartedAt     *time.Time         `gorm:"column:started_at"`
+	CompletedAt   *time.Time         `gorm:"column:completed_at"`
+	Status        string             `gorm:"column:status;not null;default:'pending'"`
+	ErrorMessage  *string            `gorm:"column:error_message"`
+	CreatedAt     time.Time          `gorm:"column:created_at;not null;default:NOW()"`
 }
 
 func (MonitorRun) TableName() string { return "monitor_runs" }
@@ -233,10 +234,13 @@ type MonitorRunsListResponse struct {
 // OrgPublisherCredential stores per-org OAuth2 publisher credentials.
 // Each org gets one set of credentials shared by all monitors in that org.
 type OrgPublisherCredential struct {
-	ID                    uuid.UUID `gorm:"column:id;primaryKey;type:uuid;default:gen_random_uuid()"`
-	OUID                  string    `gorm:"column:ou_id;not null;uniqueIndex:uq_org_publisher_creds_ou_id"`
-	OrgUUID               string    `gorm:"column:org_uuid;not null;default:''"`
-	ClientID              string    `gorm:"column:client_id;not null"`
+	ID       uuid.UUID `gorm:"column:id;primaryKey;type:uuid;default:gen_random_uuid()"`
+	OUID     string    `gorm:"column:ou_id;not null;uniqueIndex:uq_org_publisher_creds_ou_id"`
+	OrgUUID  string    `gorm:"column:org_uuid;not null;default:''"`
+	ClientID string    `gorm:"column:client_id;not null"`
+	// SecretKVPath holds the name of the OpenChoreo SecretReference for the
+	// credential. Rows written before the name was persisted hold its remote
+	// store path instead.
 	SecretKVPath          string    `gorm:"column:secret_kv_path;not null"`
 	SecretKey             string    `gorm:"column:secret_key;not null;default:'client-secret'"`
 	ClientSecretEncrypted []byte    `gorm:"column:client_secret_encrypted"`
@@ -249,10 +253,13 @@ func (OrgPublisherCredential) TableName() string { return "org_publisher_credent
 // OrgSchedulerCredential stores per-org OAuth2 credentials for the scheduler's own OpenChoreo
 // calls; never injected into the evaluation-job pod.
 type OrgSchedulerCredential struct {
-	ID                    uuid.UUID `gorm:"column:id;primaryKey;type:uuid;default:gen_random_uuid()"`
-	OUID                  string    `gorm:"column:ou_id;not null;uniqueIndex:uq_org_scheduler_creds_ou_id"`
-	OrgUUID               string    `gorm:"column:org_uuid;not null;default:''"`
-	ClientID              string    `gorm:"column:client_id;not null"`
+	ID       uuid.UUID `gorm:"column:id;primaryKey;type:uuid;default:gen_random_uuid()"`
+	OUID     string    `gorm:"column:ou_id;not null;uniqueIndex:uq_org_scheduler_creds_ou_id"`
+	OrgUUID  string    `gorm:"column:org_uuid;not null;default:''"`
+	ClientID string    `gorm:"column:client_id;not null"`
+	// SecretKVPath holds the name of the OpenChoreo SecretReference for the
+	// credential. Rows written before the name was persisted hold its remote
+	// store path instead.
 	SecretKVPath          string    `gorm:"column:secret_kv_path;not null"`
 	SecretKey             string    `gorm:"column:secret_key;not null;default:'client-secret'"`
 	ClientSecretEncrypted []byte    `gorm:"column:client_secret_encrypted"`

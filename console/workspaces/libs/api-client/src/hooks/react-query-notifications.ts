@@ -8,6 +8,7 @@ import {
   type UseQueryResult,
 } from "@tanstack/react-query";
 import { useSnackBar } from "@agent-management-platform/views";
+import { stripBasePath } from "@agent-management-platform/types";
 import { useEffect, useRef, useCallback} from "react";
 import { useAuthHooks } from "@agent-management-platform/auth";
 import { isRequestTooLargeError } from "../utils";
@@ -149,6 +150,11 @@ export function extractServerErrorMessage(
   return undefined;
 }
 
+/** Reports whether a request was aborted by its caller. */
+function isAbortError(error: unknown): boolean {
+  return (error as { name?: string } | null)?.name === "AbortError";
+}
+
 /**
  * Handles auth/session-related failures (may call `logout`) and other cases
  * where a generic error snackbar should not appear. Returns true when the
@@ -226,7 +232,7 @@ export function useApiQuery<
   // session (which normalizes the route on the way in), and writing to one key
   // collapses the several queries that fail together into a single record.
   const reportSessionExpired = useCallback(
-    () => markSessionExpired(window.location.pathname),
+    () => markSessionExpired(stripBasePath(window.location.pathname)),
     [],
   );
   const query = useQuery(options);
@@ -361,7 +367,7 @@ export function useApiMutation<
   // session (which normalizes the route on the way in), and writing to one key
   // collapses the several queries that fail together into a single record.
   const reportSessionExpired = useCallback(
-    () => markSessionExpired(window.location.pathname),
+    () => markSessionExpired(stripBasePath(window.location.pathname)),
     [],
   );
   const {
@@ -394,6 +400,8 @@ export function useApiMutation<
     onError: (error, variables, onMutateResult, context) => {
       if (
         showError &&
+        // A mutation is only aborted by its caller, on purpose: not an error to show.
+        !isAbortError(error) &&
         isAuthenticated &&
         !handleAuthAndExpectedErrors(error, logout, reportSessionExpired)
       ) {

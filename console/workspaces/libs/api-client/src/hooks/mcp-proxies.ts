@@ -22,12 +22,14 @@ import type {
   DeleteMCPProxyPathParams,
   FetchMCPProxyServerInfoPathParams,
   GetMCPProxyPathParams,
+  GetProjectMCPProxyPathParams,
   ListMCPProxiesPathParams,
   ListMCPProxiesQuery,
   MCPProxy,
   MCPProxyListResponse,
   MCPServerInfoFetchRequest,
   MCPServerInfoFetchResponse,
+  ProjectMCPProxy,
   UpdateMCPProxyPathParams,
 } from "@agent-management-platform/types";
 import {
@@ -35,6 +37,7 @@ import {
   deleteMCPProxy,
   fetchMCPProxyServerInfo,
   getMCPProxy,
+  getProjectMCPProxy,
   listMCPProxies,
   updateMCPProxy,
 } from "../apis";
@@ -77,6 +80,16 @@ export function useGetMCPProxy(params: GetMCPProxyPathParams) {
   });
 }
 
+/** A project-owned proxy from its project route; off until org, project and proxy are known. */
+export function useGetProjectMCPProxy(params: GetProjectMCPProxyPathParams) {
+  const { getToken } = useAuthHooks();
+  return useApiQuery<ProjectMCPProxy>({
+    queryKey: ["project-mcp-proxy", params],
+    queryFn: () => getProjectMCPProxy(params, getToken),
+    enabled: !!params.orgName && !!params.projName && !!params.proxyId,
+  });
+}
+
 export function useUpdateMCPProxy() {
   const { getToken } = useAuthHooks();
   const queryClient = useQueryClient();
@@ -114,10 +127,12 @@ export function useFetchMCPProxyServerInfo() {
     {
       params: FetchMCPProxyServerInfoPathParams;
       body: MCPServerInfoFetchRequest;
+      // Aborts the probe, so a superseded one frees its server-side slot.
+      signal?: AbortSignal;
     }
   >({
-    mutationFn: ({ params, body }) =>
-      fetchMCPProxyServerInfo(params, body, getToken),
+    mutationFn: ({ params, body, signal }) =>
+      fetchMCPProxyServerInfo(params, body, getToken, signal),
     showSuccess: false,
   });
 }

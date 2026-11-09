@@ -26,6 +26,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/wso2/agent-manager/agent-manager-service/workloadpolicy"
+
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 
@@ -120,6 +122,9 @@ func NewMonitorExecutor(
 
 // ExecuteMonitorRun creates a WorkflowRun and a MonitorRun DB record
 func (e *monitorExecutor) ExecuteMonitorRun(ctx context.Context, params ExecuteMonitorRunParams) (*ExecuteMonitorRunResult, error) {
+	if err := workloadpolicy.Check(ctx, params.OUID); err != nil {
+		return nil, err
+	}
 	// Pre-generate run ID so it can be included in the WorkflowRun for score publishing
 	runID := uuid.New()
 
@@ -134,8 +139,8 @@ func (e *monitorExecutor) ExecuteMonitorRun(ctx context.Context, params ExecuteM
 		"endTime", params.EndTime,
 		"evaluators", evaluators)
 
-	// Resolve LLM proxy config: secret KV path, proxy URL, and provider template handle.
-	llmProxySecretPath, llmApiBase, templateHandle, err := e.resolveLLMProxyConfig(ctx, params.Monitor)
+	// Resolve LLM proxy config: SecretReference name, proxy URL, and provider template handle.
+	llmProxySecretRefName, llmApiBase, templateHandle, err := e.resolveLLMProxyConfig(ctx, params.Monitor)
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve LLM proxy config: %w", err)
 	}
@@ -154,7 +159,7 @@ func (e *monitorExecutor) ExecuteMonitorRun(ctx context.Context, params ExecuteM
 		params.StartTime,
 		params.EndTime,
 		evaluators,
-		llmProxySecretPath,
+		llmProxySecretRefName,
 		llmApiBase,
 		templateHandle,
 		namespace,
@@ -211,13 +216,12 @@ func (e *monitorExecutor) UpdateNextRunTime(ctx context.Context, monitorID uuid.
 	return nil
 }
 
-// resolveLLMProxyConfig returns the secret KV path, gateway proxy URL, and
+// resolveLLMProxyConfig returns the SecretReference name, gateway proxy URL, and
 // provider template handle for the monitor's LLM proxy mapping.
 // Returns empty strings if no proxy mapping exists.
-// The KV path and secret key are read from the persisted mapping (set during provisioning
-// from the OpenChoreo SecretReference remoteRef fields) rather than recomputed from the
-// raw KV path, which the workflow runtime cannot use to mount env vars into pods.
-func (e *monitorExecutor) resolveLLMProxyConfig(ctx context.Context, monitor *models.Monitor) (secretPath, proxyURL, templateHandle string, err error) {
+// The workflow resolves the SecretReference by name through OpenChoreo, so the
+// remote store path is never read here.
+func (e *monitorExecutor) resolveLLMProxyConfig(ctx context.Context, monitor *models.Monitor) (secretRefName, proxyURL, templateHandle string, err error) {
 	mappings, err := e.monitorLLMMappingRepo.ListByMonitorID(ctx, monitor.ID)
 	if err != nil {
 		return "", "", "", fmt.Errorf("failed to list monitor LLM mappings: %w", err)
@@ -229,7 +233,14 @@ func (e *monitorExecutor) resolveLLMProxyConfig(ctx context.Context, monitor *mo
 
 	mapping := mappings[0]
 	if mapping.SecretKVPath == "" {
-		return "", "", "", fmt.Errorf("monitor LLM mapping for monitor %s has no secret KV path — was it provisioned correctly?", monitor.ID)
+		return "", "", "", fmt.Errorf("monitor LLM mapping for monitor %s has no secret reference — was it provisioned correctly?", monitor.ID)
+	}
+	secretRefName = mapping.SecretKVPath
+	if isLegacySecretRefPath(secretRefName) {
+		// Rows written before the SecretReference name was persisted hold its
+		// remote store path, which maps back to the name, so existing monitors
+		// keep working without a migration.
+		secretRefName = secretRefNameFromStorePath(secretRefName, monitorCompositeSecretLocation(monitor.OUID, monitor.ID))
 	}
 
 	resolvedURL, err := e.resolveProxyURL(ctx, monitor.OUID, monitor.EnvironmentID, mapping.LLMProxy)
@@ -245,7 +256,7 @@ func (e *monitorExecutor) resolveLLMProxyConfig(ctx context.Context, monitor *mo
 		templateHandle = provider.TemplateHandle
 	}
 
-	return mapping.SecretKVPath, resolvedURL, templateHandle, nil
+	return secretRefName, resolvedURL, templateHandle, nil
 }
 
 // resolveProxyURL derives the proxy base URL from the preloaded LLMProxy and the gateway
@@ -257,7 +268,6 @@ func (e *monitorExecutor) resolveLLMProxyConfig(ctx context.Context, monitor *mo
 // evaluation jobs run in a separate workflow-plane cluster (WSO2 Cloud) set
 // config.EvalJobsUsePublicGatewayURL to hand them the public vhost instead.
 func (e *monitorExecutor) resolveProxyURL(ctx context.Context, ouID, environmentID string, proxy *models.LLMProxy) (string, error) {
-	_ = ctx
 	if proxy == nil {
 		return "", fmt.Errorf("LLM proxy not preloaded for mapping")
 	}
@@ -268,13 +278,13 @@ func (e *monitorExecutor) resolveProxyURL(ctx context.Context, ouID, environment
 
 	var deployed []string
 	if e.deploymentRepo != nil {
-		ids, depErr := e.deploymentRepo.GetDeployedGatewaysByProvider(proxy.UUID, ouID)
+		ids, depErr := e.deploymentRepo.PlacedGateways(ctx, ouID, proxy.UUID)
 		if depErr != nil {
 			return "", fmt.Errorf("failed to list deployed gateways for proxy %s: %w", proxy.UUID, depErr)
 		}
 		deployed = ids
 	}
-	gateway, err := resolveEgressGatewayForArtifact(e.gatewayRepo, ouID, envUUID, deployed, nil)
+	gateway, err := monitorPolicy.ownGateway(e.gatewayRepo, ouID, envUUID, deployed)
 	if err != nil {
 		return "", fmt.Errorf("failed to resolve gateway for environment %s: %w", environmentID, err)
 	}
@@ -291,7 +301,7 @@ func (e *monitorExecutor) buildWorkflowRunRequest(
 	runID uuid.UUID,
 	startTime, endTime time.Time,
 	evaluators []models.MonitorEvaluator,
-	llmProxySecretPath string,
+	llmProxySecretRefName string,
 	llmApiBase string,
 	templateHandle string,
 	namespace string,
@@ -304,7 +314,7 @@ func (e *monitorExecutor) buildWorkflowRunRequest(
 	// Guard: block if any evaluator (builtin or custom) requires an LLM proxy and
 	// none is configured. Checking after serialize ensures custom evaluator types
 	// resolved from the DB are also considered.
-	if hasLLMJudge && llmProxySecretPath == "" {
+	if hasLLMJudge && llmProxySecretRefName == "" {
 		return nil, fmt.Errorf("monitor %s has llm_judge evaluators but no LLM proxy is configured", monitor.Name)
 	}
 
@@ -335,12 +345,12 @@ func (e *monitorExecutor) buildWorkflowRunRequest(
 				"name": monitor.EnvironmentName,
 			},
 			"evaluation": map[string]interface{}{
-				"evaluators":         evaluatorsJSON,
-				"llmProxySecretPath": llmProxySecretPath,
-				"llmApiBase":         llmApiBase,
-				"samplingRate":       monitor.SamplingRate,
-				"traceStart":         startTime.Format(time.RFC3339),
-				"traceEnd":           endTime.Format(time.RFC3339),
+				"evaluators":            evaluatorsJSON,
+				"llmProxySecretRefName": llmProxySecretRefName,
+				"llmApiBase":            llmApiBase,
+				"samplingRate":          monitor.SamplingRate,
+				"traceStart":            startTime.Format(time.RFC3339),
+				"traceEnd":              endTime.Format(time.RFC3339),
 			},
 			"publishing": publishingParams,
 		},
@@ -363,9 +373,7 @@ func (e *monitorExecutor) buildPublishingParams(ctx context.Context, monitor *mo
 	cred, err := e.credRepo.GetByOrgName(monitor.OUID)
 	switch {
 	case err == nil && cred != nil:
-		params["clientId"] = cred.ClientID
-		params["secretKVPath"] = cred.SecretKVPath
-		params["secretKey"] = cred.SecretKey
+		setPublisherCredentialParams(params, publisherCredentialsFromRow(cred))
 		return params, nil
 	case !errors.Is(err, gorm.ErrRecordNotFound):
 		return nil, fmt.Errorf("failed to look up publisher credentials for org %s: %w", monitor.OUID, err)
@@ -386,10 +394,21 @@ func (e *monitorExecutor) buildPublishingParams(ctx context.Context, monitor *mo
 		return nil, fmt.Errorf("failed to provision publisher credentials for org %s: %w", monitor.OUID, err)
 	}
 
-	params["clientId"] = provisioned.ClientID
-	params["secretKVPath"] = provisioned.SecretKVPath
-	params["secretKey"] = provisioned.SecretKey
+	setPublisherCredentialParams(params, provisioned)
 	return params, nil
+}
+
+// setPublisherCredentialParams adds the publisher credential to the workflow's
+// publishing parameters: the SecretReference name when there is one, or the
+// static credentials' KV path and key otherwise.
+func setPublisherCredentialParams(params map[string]interface{}, creds *PublisherCredentials) {
+	params["clientId"] = creds.ClientID
+	if creds.SecretRefName != "" {
+		params["secretRefName"] = creds.SecretRefName
+		return
+	}
+	params["secretKVPath"] = creds.SecretKVPath
+	params["secretKey"] = creds.SecretKey
 }
 
 // evalJobEvaluator is the JSON structure passed to the evaluation job for each evaluator.

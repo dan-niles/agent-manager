@@ -17,9 +17,10 @@
  */
 
 import { Box, Form, Typography } from "@wso2/oxygen-ui";
-import { FileCode, BookOpenText } from "@wso2/oxygen-ui-icons-react";
+import { FileCode, BookOpenText, ArrowRight } from "@wso2/oxygen-ui-icons-react";
 import { generatePath, useParams } from "react-router-dom";
 import { PageLayout } from "@agent-management-platform/views";
+import { useAgentWizardReturn } from "../utils/useAgentWizardReturn";
 import { absoluteRouteMap } from "@agent-management-platform/types";
 
 interface NewAgentSourceOptionsProps {
@@ -28,15 +29,16 @@ interface NewAgentSourceOptionsProps {
 
 export const NewAgentSourceOptions = ({ onSelect }: NewAgentSourceOptionsProps) => {
     const { orgId, projectId } = useParams<{ orgId: string; projectId: string }>();
+    const { wizardState } = useAgentWizardReturn();
 
     const handleSelect = (type: string) => {
         onSelect(type as "source" | "catalog");
     };
 
-    const backHref = generatePath(absoluteRouteMap.children.org.children.projects.path, {
-        orgId: orgId ?? "",
-        projectId: projectId ?? "default",
-    });
+    const backHref = generatePath(
+        absoluteRouteMap.children.org.children.projects.children.newAgent.path,
+        { orgId: orgId ?? "", projectId: projectId ?? "default" },
+    );
 
     const sourceOptions = [
         {
@@ -44,12 +46,14 @@ export const NewAgentSourceOptions = ({ onSelect }: NewAgentSourceOptionsProps) 
             title: "Source Code",
             subheader: "Provide agent source code from project repository",
             icon: <FileCode size={56} />,
+            ctaLabel: "Use source code",
         },
         {
             type: "catalog",
             title: "Agent Catalog",
             subheader: "Pick an Agent Kind from Agent Catalog",
             icon: <BookOpenText size={56} />,
+            ctaLabel: "Browse catalog",
         },
     ] as const;
 
@@ -59,7 +63,8 @@ export const NewAgentSourceOptions = ({ onSelect }: NewAgentSourceOptionsProps) 
             description="Pick a source type for the agent"
             disableIcon
             backHref={backHref}
-            backLabel="Back to Agents"
+            backState={wizardState}
+            backLabel="Back to add new agent"
         >
             <Box display="flex" flexDirection="row" gap={3} flexWrap="wrap">
                 {sourceOptions.map((option) => (
@@ -76,6 +81,11 @@ export const NewAgentSourceOptions = ({ onSelect }: NewAgentSourceOptionsProps) 
                             justifyContent: "flex-start",
                             gap: 3,
                             textAlign: "left",
+                            // The CTA is a visual span (a <button> can't nest in this
+                            // CardButton), so it highlights on hover/focus of the card.
+                            "&:hover .cta-link, &:focus-visible .cta-link": {
+                                bgcolor: "action.hover",
+                            },
                         }}
                     >
                         <Box
@@ -96,6 +106,26 @@ export const NewAgentSourceOptions = ({ onSelect }: NewAgentSourceOptionsProps) 
                             <Typography variant="body1" textAlign="left" sx={{ maxWidth: 260 }}>
                                 {option.subheader}
                             </Typography>
+                            <Box
+                                component="span"
+                                className="cta-link"
+                                sx={{
+                                    display: "inline-flex",
+                                    alignItems: "center",
+                                    gap: 1,
+                                    mt: 1,
+                                    ml: -1.5,
+                                    px: 1.5,
+                                    py: 0.75,
+                                    borderRadius: 999,
+                                    color: "primary.main",
+                                    fontWeight: 500,
+                                    transition: "background-color 0.15s ease",
+                                }}
+                            >
+                                {option.ctaLabel}
+                                <ArrowRight size={16} />
+                            </Box>
                         </Box>
                     </Form.CardButton>
                 ))}

@@ -17,7 +17,7 @@
 
 import { useRef, useState } from "react";
 import { generatePath, useParams } from "react-router-dom";
-import { absoluteRouteMap } from "@agent-management-platform/types";
+import { absoluteRouteMap, withBasePath } from "@agent-management-platform/types";
 import {
   DrawerContent,
   DrawerHeader,
@@ -63,11 +63,12 @@ export const ProviderSelectDrawer: React.FC<ProviderSelectDrawerProps> = ({
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // Rendered as a raw <a target="_blank">, which bypasses the router basename.
   const addProviderPath = orgId
-    ? generatePath(
+    ? withBasePath(generatePath(
         absoluteRouteMap.children.org.children.llmProviders.children.add.path,
         { orgId },
-      )
+      ))
     : null;
 
   const filtered = providers.filter((p) => {
@@ -170,7 +171,7 @@ export const ProviderSelectDrawer: React.FC<ProviderSelectDrawerProps> = ({
               >
                 <Plus size={16} />
                 <Typography variant="body2" color="primary">
-                  Add LLM Provider
+                  Add LLM provider
                 </Typography>
                 <ExternalLink size={14} />
               </Box>

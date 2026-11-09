@@ -42,23 +42,24 @@
   "dependencies": {
     "clsx": "2.1.1",
     "react-dom": "19.2.3",
-    "react-router-dom": "6.28.0",
+    "react-router-dom": "6.30.6",
     "date-fns": "4.1.0",
     "@mui/material": "7.0.0",
     "@mui/icons-material": "7.0.0",
     "@emotion/react": "11.13.5",
     "@emotion/styled": "11.13.5",
-    "@wso2/oxygen-ui": "0.15.0",
-    "@wso2/oxygen-ui-charts-react": "0.13.1",
-    "@wso2/oxygen-ui-icons-react": "0.13.1",
+    "@wso2/oxygen-ui": "0.20.0",
+    "@wso2/oxygen-ui-charts-react": "0.20.0",
+    "@wso2/oxygen-ui-icons-react": "0.20.0",
     "@tanstack/react-query": "5.90.5",
     "@agent-management-platform/views": "workspace:*",
     "@agent-management-platform/api-client": "workspace:*",
     "@agent-management-platform/types": "workspace:*",
+    "@agent-management-platform/feature-management": "workspace:*",
     "@agent-management-platform/shared-component": "workspace:*",
     "@agent-management-platform/llm-providers": "workspace:*",
-    "zod": "4.3.6",
-    "lodash": "4.17.21",
+    "zod": "4.6.7",
+    "lodash": "4.18.1",
     "@monaco-editor/react": "4.7.0"
   },
   "devDependencies": {
@@ -107,6 +108,6 @@
   },
   "peerDependencies": {
     "react": "19.2.3",
-    "@babel/runtime-corejs3": "7.11.2"
+    "@babel/runtime-corejs3": "7.29.7"
   }
 }

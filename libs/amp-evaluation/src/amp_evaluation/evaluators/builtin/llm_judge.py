@@ -68,6 +68,16 @@ from amp_evaluation.dataset.models import Task
 # ============================================================================
 
 
+def _format_success_criteria(task: Optional[Task], default: str = "", indent: str = "") -> str:
+    """Format Task.success_criteria (str or List[str]) for LLM judge prompts."""
+    if not task or not task.success_criteria:
+        return default
+    criteria = task.success_criteria
+    if isinstance(criteria, list):
+        return f"\n{indent}".join(f"- {c}" for c in criteria)
+    return criteria
+
+
 class HelpfulnessEvaluator(LLMAsJudgeEvaluator):
     """Scores whether the response actually helps the user with what they asked for."""
 
@@ -79,7 +89,8 @@ class HelpfulnessEvaluator(LLMAsJudgeEvaluator):
     tags = ["llm-judge", "quality"]
 
     def build_prompt(self, trace: Trace, task: Optional[Task] = None) -> str:
-        criteria = f"\n\nAdditional success criteria: {task.success_criteria}" if task and task.success_criteria else ""
+        formatted_criteria = _format_success_criteria(task)
+        criteria = f"\n\nAdditional success criteria:\n{formatted_criteria}" if formatted_criteria else ""
 
         return f"""You are an expert evaluator. Your sole criterion is HELPFULNESS: does the response actually help the user with what they asked for?
 
@@ -173,7 +184,8 @@ class CompletenessEvaluator(LLMAsJudgeEvaluator):
     tags = ["llm-judge", "quality"]
 
     def build_prompt(self, trace: Trace, task: Optional[Task] = None) -> str:
-        coverage = f"\n\nExpected coverage: {task.success_criteria}" if task and task.success_criteria else ""
+        formatted_coverage = _format_success_criteria(task)
+        coverage = f"\n\nExpected coverage:\n{formatted_coverage}" if formatted_coverage else ""
 
         return f"""You are an expert evaluator. Your sole criterion is COMPLETENESS: does the response address every part of the user's query without leaving gaps?
 
@@ -540,6 +552,13 @@ class ToneEvaluator(LLMAsJudgeEvaluator):
         ),
     )
 
+    def evaluate(self, llm_span: LLMSpan) -> EvalResult:
+        """Skip LLM calls that only request tools. Judge the rest as usual."""
+        # A tool-only call's output is the parser's [tool_call: ...] summary, not reply text.
+        if llm_span._tool_calls and llm_span.output.startswith("[tool_call:"):
+            return EvalResult.skip("LLM call only requested tools, so there is no response text to judge for tone")
+        return super().evaluate(llm_span)
+
     def build_prompt(self, llm_span: LLMSpan) -> str:
         context_line = f"\nExpected context: {self.context}" if self.context else ""
 
@@ -751,7 +770,8 @@ Agent Instructions:
 
 What is expected from the agent:
   Task description: {task.description if task and task.description else "(not available)"}
-  Success criteria: {(chr(10).join("- " + c for c in task.success_criteria) if isinstance(task.success_criteria, list) else str(task.success_criteria)) if task and task.success_criteria else "(not available)"}
+  Success criteria:
+  {_format_success_criteria(task, default="(not available)", indent="  ")}
 
 Agent Response: {agent_trace.output}
 
@@ -772,11 +792,3 @@ Scoring Rubric:
   0.5  = Most instructions are partially followed but key requirements are missed
   0.75 = Nearly all instructions are followed with only minor deviations
   1.0  = Every instruction and constraint is fully respected"""
-
-    def _format_success_criteria(self, task: Optional[Task]) -> str:
-        if not task or not task.success_criteria:
-            return "(not available)"
-        criteria = task.success_criteria
-        if isinstance(criteria, list):
-            return "\n".join(f"- {c}" for c in criteria)
-        return str(criteria)

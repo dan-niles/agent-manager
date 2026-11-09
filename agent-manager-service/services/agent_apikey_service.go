@@ -27,6 +27,7 @@ import (
 
 	"github.com/wso2/agent-manager/agent-manager-service/audit"
 	"github.com/wso2/agent-manager/agent-manager-service/clients/openchoreosvc/client"
+	"github.com/wso2/agent-manager/agent-manager-service/events"
 	"github.com/wso2/agent-manager/agent-manager-service/middleware/logger"
 	"github.com/wso2/agent-manager/agent-manager-service/models"
 	"github.com/wso2/agent-manager/agent-manager-service/repositories"
@@ -132,13 +133,12 @@ func (s *AgentAPIKeyService) resolveAgentAPIArtifact(ctx context.Context, ouID, 
 	if err != nil {
 		return nil, "", fmt.Errorf("failed to get environment: %w", translateEnvironmentError(err))
 	}
+	// envID may be a name or a UUID; events always carry the name.
+	events.SetEnvironment(ctx, environment.Name)
 
-	artifact, err := s.artifactRepo.GetByHandle(agentEnvAPIArtifactHandle(projectName, agentName, environment.UUID), ouID)
+	artifact, err := agentEnvAPIArtifact(s.artifactRepo, ouID, projectName, agentName, environment.UUID, models.AgentArtifactKinds...)
 	if err != nil {
 		return nil, "", fmt.Errorf("failed to get agent API artifact: %w", err)
-	}
-	if artifact.Kind != models.KindAgent {
-		return nil, "", utils.ErrArtifactNotFound
 	}
 	return artifact, environment.UUID, nil
 }
@@ -202,6 +202,9 @@ func (s *AgentAPIKeyService) CreateAPIKey(
 	resp, err := s.broadcaster.broadcastCreateToGateways(gateways, ouID, artifactUUID, artifactUUID, req)
 	if resp != nil {
 		resp.GatewayConnected = s.gatewaysConnected(gateways)
+		// The route's event omits the response, which holds the key itself,
+		// so the key name is added for the event's subject.
+		events.AddData(ctx, "name", resp.KeyID)
 	}
 	attempt.Complete(ctx, err, audit.Detail("gatewayConnected", s.gatewaysConnected(gateways) != nil))
 	return resp, err
@@ -296,7 +299,7 @@ func (s *AgentAPIKeyService) ListAPIKeys(
 	if err != nil {
 		return nil, err
 	}
-	all, err := s.apiKeyRepo.ListPermanentByArtifactKind(ouID, models.KindAgent)
+	all, err := s.apiKeyRepo.ListPermanentByArtifactKinds(ouID, models.AgentArtifactKinds)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list API keys: %w", err)
 	}

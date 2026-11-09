@@ -32,6 +32,19 @@ import (
 	"github.com/wso2/agent-manager/agent-manager-service/utils"
 )
 
+// DeployableTestImages are the images the default mock reports as built by the
+// agent under test.
+var DeployableTestImages = []string{
+	"registry.example.com/myapp:v0.9.0",
+	"registry.example.com/myapp:v1.0.0",
+	"registry.example.com/myapp:v1.2.0",
+	"registry.example.com/a2a:v1.0.0",
+}
+
+// DefaultEnvironmentUUID is the id the default mock reports for every environment; a test that creates, builds,
+// deploys or promotes an API agent seeds an ingress gateway under it.
+const DefaultEnvironmentUUID = "6f1c2f64-3f7e-4a52-9c1d-0b7a8e2d4c11"
+
 // CreateMockOpenChoreoClient creates a mock OpenChoreo client with default behavior for testing
 func CreateMockOpenChoreoClient() *clientmocks.OpenChoreoClientMock {
 	return &clientmocks.OpenChoreoClientMock{
@@ -40,6 +53,15 @@ func CreateMockOpenChoreoClient() *clientmocks.OpenChoreoClientMock {
 		// realistic value rather than an empty string.
 		NamespaceForFunc: func(ouID string) string {
 			return config.GetConfig().OpenChoreo.DefaultNamespace
+		},
+		// DeployAgent only accepts an image the agent owns, so the agent "built"
+		// every image the API tests deploy. A test of the rejection path overrides it.
+		ListBuildsFunc: func(_ context.Context, _, _, _ string) ([]*models.BuildResponse, error) {
+			builds := make([]*models.BuildResponse, 0, len(DeployableTestImages))
+			for _, img := range DeployableTestImages {
+				builds = append(builds, &models.BuildResponse{ImageId: img})
+			}
+			return builds, nil
 		},
 		ListOrganizationsFunc: func(_ context.Context) ([]*models.OrganizationResponse, error) {
 			return []*models.OrganizationResponse{
@@ -81,7 +103,7 @@ func CreateMockOpenChoreoClient() *clientmocks.OpenChoreoClientMock {
 		UpdateComponentDeploymentConfigFunc: func(ctx context.Context, namespaceName string, projectName string, componentName string, req client.ComponentDeploymentConfigRequest) error {
 			return nil
 		},
-		TriggerBuildFunc: func(_ context.Context, namespaceName string, projectName string, componentName string, commitID string, workflowRunName string) (*models.BuildResponse, error) {
+		TriggerBuildFunc: func(_ context.Context, namespaceName string, projectName string, componentName string, commitID string, workflowRunName string, _ []client.EnvVar, _ client.BuildClientSource) (*models.BuildResponse, error) {
 			if workflowRunName == "" {
 				workflowRunName = fmt.Sprintf("%s-build-1", componentName)
 			}
@@ -131,7 +153,7 @@ func CreateMockOpenChoreoClient() *clientmocks.OpenChoreoClientMock {
 		},
 		GetEnvironmentFunc: func(ctx context.Context, namespaceName, environmentName string) (*models.EnvironmentResponse, error) {
 			return &models.EnvironmentResponse{
-				UUID: "environment-uid-123",
+				UUID: DefaultEnvironmentUUID,
 				Name: environmentName,
 			}, nil
 		},
@@ -203,6 +225,11 @@ func CreateMockOpenChoreoClient() *clientmocks.OpenChoreoClientMock {
 		ReplaceComponentFileMountsFunc: func(ctx context.Context, namespaceName string, projectName string, componentName string, files []client.FileVar) error {
 			return nil
 		},
+		// nil means OpenChoreo can reconcile the component; deploy aborts early otherwise.
+		GetComponentReconcileBlockFunc: func(ctx context.Context, namespaceName string, componentName string) (*client.ComponentReconcileBlock, error) {
+			// A nil block is the "not blocked" signal this API defines.
+			return nil, nil
+		},
 		RemoveWorkloadEnvVarsFunc: func(ctx context.Context, namespaceName string, componentName string, envVarKeys []string) error {
 			return nil
 		},
@@ -219,6 +246,11 @@ func CreateMockOpenChoreoClient() *clientmocks.OpenChoreoClientMock {
 		},
 		GetComponentConfigurationsFunc: func(ctx context.Context, namespaceName string, projectName string, componentName string, environment string) ([]models.EnvVars, error) {
 			return nil, nil
+		},
+		// No agent API key seeded on the Component: an API agent's deploy looks for one when its
+		// environment has none yet.
+		GetComponentBaseEnvVarsFunc: func(ctx context.Context, ouID string, componentName string) ([]client.EnvVar, error) {
+			return []client.EnvVar{}, nil
 		},
 		GetComponentFileMountsFunc: func(ctx context.Context, namespaceName string, projectName string, componentName string, environment string) ([]models.FileMountEntry, error) {
 			return nil, nil

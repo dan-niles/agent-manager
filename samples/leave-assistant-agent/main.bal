@@ -7,6 +7,8 @@ import ballerinax/amp as _;
 
 // Provide the OpenAI API key via Config.toml (configurable).
 configurable string openAiApiKey = ?;
+// Optional OpenAI-compatible endpoint for gateways and local testing.
+configurable string openAiServiceUrl = "https://api.openai.com/v1";
 
 // A ballerina/ai chat service: POST /leave-assistant/chat with
 // {message, sessionId} -> {message}, on the default HTTP listener (port 9090).
@@ -287,5 +289,5 @@ final ai:Agent leaveAssistantAgent = check new ({
     },
     tools: [getLeaveBalance, requestLeave, listMyLeaveRequests, cancelLeaveRequest,
             approveLeaveRequest, rejectLeaveRequest, getCurrentDate],
-    model: check new openai:ModelProvider(openAiApiKey, openai:GPT_4O)
+    model: check new openai:ModelProvider(openAiApiKey, openai:GPT_4O, serviceUrl = openAiServiceUrl)
 });

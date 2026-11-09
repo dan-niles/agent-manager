@@ -38,3 +38,15 @@ export function displayAgentSubType(subType?: string) {
       return "A2A";
   }
 }
+
+type AgentWithType = { agentType?: { type?: string; subType?: string } };
+
+/** agentType.type is "external-agent-api" iff provisioning is external. */
+export function isExternalAgent(agent?: AgentWithType) {
+  return agent?.agentType?.type === "external-agent-api";
+}
+
+/** Any external agent can register an A2A card; a platform agent must be built as one. */
+export function servesA2A(agent?: AgentWithType) {
+  return isExternalAgent(agent) || agent?.agentType?.subType === "a2a-agent";
+}

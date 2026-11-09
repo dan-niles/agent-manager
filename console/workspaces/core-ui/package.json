@@ -16,7 +16,7 @@
     "dist"
   ],
   "engines": {
-    "node": ">=20.19.0 || >=22.12.0"
+    "node": "^22.23.4 || ^24.22.1 || >=26.12.1"
   },
   "scripts": {
     "dev": "VITE_WATCH=1 vite build --watch",
@@ -34,18 +34,20 @@
     "react-markdown": "10.1.0",
     "@agent-management-platform/auth": "workspace:*",
     "@agent-management-platform/types": "workspace:*",
+    "@agent-management-platform/feature-management": "workspace:*",
     "@agent-management-platform/eslint-config": "workspace:*",
     "@agent-management-platform/api-client": "workspace:*",
     "@agent-management-platform/views": "workspace:*",
     "clsx": "2.1.1",
     "date-fns": "4.1.0",
-    "lodash": "4.17.21",
+    "lodash": "4.18.1",
     "@fontsource/roboto": "5.2.5",
     "@agent-management-platform/add-new-agent": "workspace:*",
     "@agent-management-platform/add-new-project": "workspace:*",
     "@agent-management-platform/shared-component": "workspace:*",
-    "js-yaml": "4.1.1",
-    "zod": "4.3.6",
+    "js-yaml": "4.3.2",
+    "zod": "4.6.7",
+    "@agent-management-platform/level-resource-listing": "workspace:*",
     "@agent-management-platform/overview": "workspace:*",
     "@agent-management-platform/configure-agent": "workspace:*",
     "@agent-management-platform/build": "workspace:*",
@@ -63,7 +65,7 @@
     "@agent-management-platform/deployment-pipelines": "workspace:*",
     "@agent-management-platform/agent-security": "workspace:*",
     "@agent-management-platform/agent-kind": "workspace:*",
-    "swagger-ui-react": "5.19.0",
+    "swagger-ui-react": "5.34.0",
     "@monaco-editor/react": "4.7.0"
   },
   "peerDependencies": {
@@ -78,7 +80,7 @@
     "@wso2/oxygen-ui-icons-react": ">=0.10.1",
     "@wso2/oxygen-ui-charts-react": ">=0.10.1",
     "@tanstack/react-query": ">=5.0.0",
-    "@thunderid/react": "1.0.6"
+    "@thunderid/react": "1.12.0"
   },
   "devDependencies": {
     "@types/node": "24.6.0",
@@ -96,16 +98,16 @@
     "@types/swagger-ui-react": "5.18.0",
     "react": "19.2.3",
     "react-dom": "19.2.3",
-    "react-router-dom": "6.28.0",
+    "react-router-dom": "6.30.6",
     "@mui/material": "7.0.0",
     "@mui/icons-material": "7.0.0",
     "@emotion/react": "11.13.5",
     "@emotion/styled": "11.13.5",
-    "@wso2/oxygen-ui": "0.15.0",
-    "@wso2/oxygen-ui-icons-react": "0.13.1",
-    "@wso2/oxygen-ui-charts-react": "0.13.1",
+    "@wso2/oxygen-ui": "0.20.0",
+    "@wso2/oxygen-ui-icons-react": "0.20.0",
+    "@wso2/oxygen-ui-charts-react": "0.20.0",
     "@tanstack/react-query": "5.90.5",
-    "@thunderid/react": "1.0.6",
+    "@thunderid/react": "1.12.0",
     "rollup": "4.62.4",
     "rollup-plugin-dts": "~6.4.1"
   }

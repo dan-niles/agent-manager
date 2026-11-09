@@ -20,6 +20,7 @@ import type {
   DeleteMCPProxyPathParams,
   FetchMCPProxyServerInfoPathParams,
   GetMCPProxyPathParams,
+  GetProjectMCPProxyPathParams,
   ListAvailableMCPPoliciesPathParams,
   ListMCPProxiesPathParams,
   ListMCPProxiesQuery,
@@ -28,6 +29,7 @@ import type {
   MCPProxyListResponse,
   MCPServerInfoFetchRequest,
   MCPServerInfoFetchResponse,
+  ProjectMCPProxy,
   UpdateMCPProxyPathParams,
 } from "@agent-management-platform/types";
 import {
@@ -53,6 +55,9 @@ export async function listMCPProxies(
   }
   if (query?.offset !== undefined) {
     searchParams.offset = String(query.offset);
+  }
+  if (query?.project) {
+    searchParams.project = query.project;
   }
 
   const res = await httpGET(`${SERVICE_BASE}/orgs/${org}/mcp-proxies`, {
@@ -107,6 +112,24 @@ export async function getMCPProxy(
   return res.json();
 }
 
+/** A project-owned proxy with its per-environment bindings, from the project route. */
+export async function getProjectMCPProxy(
+  params: GetProjectMCPProxyPathParams,
+  getToken?: () => Promise<string>,
+): Promise<ProjectMCPProxy> {
+  const org = encodeRequired(params.orgName, "orgName");
+  const proj = encodeRequired(params.projName, "projName");
+  const proxyId = encodeRequired(params.proxyId, "proxyId");
+  const token = getToken ? await getToken() : undefined;
+
+  const res = await httpGET(
+    `${SERVICE_BASE}/orgs/${org}/projects/${proj}/mcp-proxies/${proxyId}`,
+    { token },
+  );
+  if (!res.ok) throw await res.json();
+  return res.json();
+}
+
 export async function updateMCPProxy(
   params: UpdateMCPProxyPathParams,
   body: MCPProxy,
@@ -143,6 +166,7 @@ export async function fetchMCPProxyServerInfo(
   params: FetchMCPProxyServerInfoPathParams,
   body: MCPServerInfoFetchRequest,
   getToken?: () => Promise<string>,
+  signal?: AbortSignal,
 ): Promise<MCPServerInfoFetchResponse> {
   const org = encodeRequired(params.orgName, "orgName");
   const token = getToken ? await getToken() : undefined;
@@ -150,7 +174,7 @@ export async function fetchMCPProxyServerInfo(
   const res = await httpPOST(
     `${SERVICE_BASE}/orgs/${org}/mcp-proxies/fetch-server-info`,
     body,
-    { token },
+    { token, signal },
   );
   if (!res.ok) throw await res.json();
   return res.json();

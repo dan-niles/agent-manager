@@ -17,10 +17,11 @@
  */
 
 import React, { useCallback, useMemo, useState } from "react";
-import { Alert, Form } from "@wso2/oxygen-ui";
+import { Alert, Form, Link } from "@wso2/oxygen-ui";
 import { PageLayout, useFormValidation } from "@agent-management-platform/views";
 import { useUnsavedChangesGuard } from "@agent-management-platform/shared-component";
 import { generatePath, useNavigate, useParams } from "react-router-dom";
+import { useAgentWizardReturn } from "../utils/useAgentWizardReturn";
 import {
   absoluteRouteMap,
   OrgProjPathParams,
@@ -35,6 +36,7 @@ import { InternalAgentForm } from "../forms/InternalAgentForm";
 import { CreateButtons } from "./CreateButtons";
 import {
   buildAgentCreationPayload,
+  deriveSampleAgentSeed,
   findLowestEnvironmentName,
   hasMultipleEnvironments,
 } from "../utils/buildAgentPayload";
@@ -42,15 +44,16 @@ import {
   hasUnresolvedMCPSecurity,
   mcpEntryVarNames,
 } from "../utils/mcpEnvVarNames";
+import {
+  getSampleAgentById,
+  getSampleReadmeUrl,
+  type SampleAgentDefinition,
+} from "../data/sampleAgents";
 
-export const InternalAgentFlow: React.FC = () => {
-  const navigate = useNavigate();
-  const { orgId, projectId } = useParams<{
-    orgId: string;
-    projectId?: string;
-  }>();
-
-  const [initialFormData] = useState<CreateAgentFormValues>(() => ({
+const buildInitialFormValues = (
+  sample: SampleAgentDefinition | undefined,
+): CreateAgentFormValues => {
+  const defaults: CreateAgentFormValues = {
     deploymentType: "new" as const,
     enableAutoInstrumentation: true,
     // instrumentationVersion and languageVersion start undefined and get
@@ -72,7 +75,25 @@ export const InternalAgentFlow: React.FC = () => {
     openApiPath: "",
     env: [],
     files: [],
-  }));
+  };
+
+  return sample ? { ...defaults, ...deriveSampleAgentSeed(sample) } : defaults;
+};
+
+export const InternalAgentFlow: React.FC = () => {
+  const navigate = useNavigate();
+  const { orgId, projectId } = useParams<{
+    orgId: string;
+    projectId?: string;
+  }>();
+
+  // Resolved once on mount from the sample picked on the previous screen, if any.
+  const [selectedSample] = useState(() =>
+    getSampleAgentById(new URLSearchParams(window.location.search).get("sample"))
+  );
+  const [initialFormData] = useState<CreateAgentFormValues>(() =>
+    buildInitialFormValues(selectedSample)
+  );
   const [formData, setFormData] = useState<CreateAgentFormValues>(initialFormData);
 
   const { errors, validateForm, setFieldError, validateField } =
@@ -90,7 +111,12 @@ export const InternalAgentFlow: React.FC = () => {
   const { data: buildOptions } = useAgentBuildOptions({ orgName: orgId ?? "" });
   const baselineFormData = useMemo<CreateAgentFormValues>(() => {
     if (!buildOptions) return initialFormData;
-    const languageVersion = buildOptions.python.defaultVersion;
+    // Mirror the form: keep a supported seeded version (e.g. from a sample).
+    const seeded = initialFormData.languageVersion;
+    const languageVersion =
+      seeded && buildOptions.python.supportedVersions.includes(seeded)
+        ? seeded
+        : buildOptions.python.defaultVersion;
     const defaultInstrumentation = buildOptions.instrumentation.defaultVersion;
     const compat = buildOptions.instrumentation.versions.filter((v) =>
       v.pythonVersions.includes(languageVersion),
@@ -117,6 +143,7 @@ export const InternalAgentFlow: React.FC = () => {
     );
   }, [formData, baselineFormData, llmProviders, mcpProxies]);
   const { allowNavigation } = useUnsavedChangesGuard(isDirty);
+  const { returnTo, wizardState } = useAgentWizardReturn();
 
   const params = useMemo<OrgProjPathParams>(
     () => ({
@@ -141,15 +168,8 @@ export const InternalAgentFlow: React.FC = () => {
   const firstEnvOnlyNotice = multipleEnvironments ? initialEnvironmentName : undefined;
 
   const handleCancel = useCallback(() => {
-    allowNavigation(() =>
-      navigate(
-        generatePath(absoluteRouteMap.children.org.children.projects.path, {
-          orgId: orgId ?? "",
-          projectId: projectId ?? "default",
-        })
-      )
-    );
-  }, [allowNavigation, navigate, orgId, projectId]);
+    allowNavigation(() => navigate(returnTo));
+  }, [allowNavigation, navigate, returnTo]);
 
   const [lastSubmittedValidationErrors, setLastSubmittedValidationErrors] = useState<
     Record<string, string | undefined>
@@ -211,8 +231,11 @@ export const InternalAgentFlow: React.FC = () => {
   ]);
 
 
+  // A sample is picked on Add New Agent, skipping source type selection, so
+  // send the user back to where they actually came from.
+  const newAgentRoute = absoluteRouteMap.children.org.children.projects.children.newAgent;
   const backHref = generatePath(
-    absoluteRouteMap.children.org.children.projects.children.newAgent.children.create.path,
+    selectedSample ? newAgentRoute.path : newAgentRoute.children.create.path,
     { orgId: orgId ?? "", projectId: projectId ?? "default" },
   );
 
@@ -222,9 +245,19 @@ export const InternalAgentFlow: React.FC = () => {
       description="Specify the source repository, select the agent type, and deploy it on the platform."
       disableIcon
       backHref={backHref}
-      backLabel="Back to Source Type Selection"
+      backState={wizardState}
+      backLabel={selectedSample ? "Back to add new agent" : "Back to source type selection"}
     >
       <Form.Stack spacing={3}>
+        {selectedSample && (
+          <Alert severity="info">
+            Fields are pre-filled from the <strong>{selectedSample.title}</strong> sample. See the{" "}
+            <Link href={getSampleReadmeUrl(selectedSample)} target="_blank" rel="noopener noreferrer">
+              README
+            </Link>{" "}
+            for setup and testing details.
+          </Alert>
+        )}
         <InternalAgentForm
           formData={formData}
           setFormData={setFormData}

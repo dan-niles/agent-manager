@@ -6,8 +6,12 @@ package repomocks
 import (
 	"context"
 	"sync"
+	"time"
 
+	"github.com/google/uuid"
 	"github.com/wso2/agent-manager/agent-manager-service/models"
+	"github.com/wso2/agent-manager/agent-manager-service/repositories"
+	"gorm.io/gorm"
 )
 
 // APIKeyRepositoryMock is a mock implementation of repositories.APIKeyRepository.
@@ -22,6 +26,12 @@ import (
 //			GetByArtifactAndNameFunc: func(artifactUUID string, name string) (*models.StoredAPIKey, error) {
 //				panic("mock out the GetByArtifactAndName method")
 //			},
+//			InsertFunc: func(key *models.StoredAPIKey) error {
+//				panic("mock out the Insert method")
+//			},
+//			ListActiveByArtifactTxFunc: func(ctx context.Context, tx *gorm.DB, artifactUUID uuid.UUID, now time.Time) ([]models.StoredAPIKey, error) {
+//				panic("mock out the ListActiveByArtifactTx method")
+//			},
 //			ListByApplicationUUIDFunc: func(applicationUUID string) ([]models.StoredAPIKey, error) {
 //				panic("mock out the ListByApplicationUUID method")
 //			},
@@ -31,11 +41,17 @@ import (
 //			ListByArtifactKindFunc: func(ouID string, kind string) ([]models.StoredAPIKey, error) {
 //				panic("mock out the ListByArtifactKind method")
 //			},
-//			ListByArtifactKindAndEnvsFunc: func(ouID string, kind string, envUUIDs []string) ([]models.StoredAPIKey, error) {
+//			ListByArtifactKindAndEnvsFunc: func(ouID string, kinds []string, envUUIDs []string) ([]models.StoredAPIKey, error) {
 //				panic("mock out the ListByArtifactKindAndEnvs method")
 //			},
-//			ListPermanentByArtifactKindFunc: func(ouID string, kind string) ([]models.StoredAPIKey, error) {
-//				panic("mock out the ListPermanentByArtifactKind method")
+//			ListPermanentByArtifactKindsFunc: func(ouID string, kinds []string) ([]models.StoredAPIKey, error) {
+//				panic("mock out the ListPermanentByArtifactKinds method")
+//			},
+//			ReplaceIfUnchangedFunc: func(key *models.StoredAPIKey, prevHash string) error {
+//				panic("mock out the ReplaceIfUnchanged method")
+//			},
+//			TransactionFunc: func(ctx context.Context, fn func(repo repositories.APIKeyRepository, tx *gorm.DB) error) error {
+//				panic("mock out the Transaction method")
 //			},
 //			UpsertFunc: func(key *models.StoredAPIKey) error {
 //				panic("mock out the Upsert method")
@@ -53,6 +69,12 @@ type APIKeyRepositoryMock struct {
 	// GetByArtifactAndNameFunc mocks the GetByArtifactAndName method.
 	GetByArtifactAndNameFunc func(artifactUUID string, name string) (*models.StoredAPIKey, error)
 
+	// InsertFunc mocks the Insert method.
+	InsertFunc func(key *models.StoredAPIKey) error
+
+	// ListActiveByArtifactTxFunc mocks the ListActiveByArtifactTx method.
+	ListActiveByArtifactTxFunc func(ctx context.Context, tx *gorm.DB, artifactUUID uuid.UUID, now time.Time) ([]models.StoredAPIKey, error)
+
 	// ListByApplicationUUIDFunc mocks the ListByApplicationUUID method.
 	ListByApplicationUUIDFunc func(applicationUUID string) ([]models.StoredAPIKey, error)
 
@@ -63,10 +85,16 @@ type APIKeyRepositoryMock struct {
 	ListByArtifactKindFunc func(ouID string, kind string) ([]models.StoredAPIKey, error)
 
 	// ListByArtifactKindAndEnvsFunc mocks the ListByArtifactKindAndEnvs method.
-	ListByArtifactKindAndEnvsFunc func(ouID string, kind string, envUUIDs []string) ([]models.StoredAPIKey, error)
+	ListByArtifactKindAndEnvsFunc func(ouID string, kinds []string, envUUIDs []string) ([]models.StoredAPIKey, error)
 
-	// ListPermanentByArtifactKindFunc mocks the ListPermanentByArtifactKind method.
-	ListPermanentByArtifactKindFunc func(ouID string, kind string) ([]models.StoredAPIKey, error)
+	// ListPermanentByArtifactKindsFunc mocks the ListPermanentByArtifactKinds method.
+	ListPermanentByArtifactKindsFunc func(ouID string, kinds []string) ([]models.StoredAPIKey, error)
+
+	// ReplaceIfUnchangedFunc mocks the ReplaceIfUnchanged method.
+	ReplaceIfUnchangedFunc func(key *models.StoredAPIKey, prevHash string) error
+
+	// TransactionFunc mocks the Transaction method.
+	TransactionFunc func(ctx context.Context, fn func(repo repositories.APIKeyRepository, tx *gorm.DB) error) error
 
 	// UpsertFunc mocks the Upsert method.
 	UpsertFunc func(key *models.StoredAPIKey) error
@@ -86,6 +114,22 @@ type APIKeyRepositoryMock struct {
 			ArtifactUUID string
 			// Name is the name argument value.
 			Name string
+		}
+		// Insert holds details about calls to the Insert method.
+		Insert []struct {
+			// Key is the key argument value.
+			Key *models.StoredAPIKey
+		}
+		// ListActiveByArtifactTx holds details about calls to the ListActiveByArtifactTx method.
+		ListActiveByArtifactTx []struct {
+			// Ctx is the ctx argument value.
+			Ctx context.Context
+			// Tx is the tx argument value.
+			Tx *gorm.DB
+			// ArtifactUUID is the artifactUUID argument value.
+			ArtifactUUID uuid.UUID
+			// Now is the now argument value.
+			Now time.Time
 		}
 		// ListByApplicationUUID holds details about calls to the ListByApplicationUUID method.
 		ListByApplicationUUID []struct {
@@ -110,17 +154,31 @@ type APIKeyRepositoryMock struct {
 		ListByArtifactKindAndEnvs []struct {
 			// OuID is the ouID argument value.
 			OuID string
-			// Kind is the kind argument value.
-			Kind string
+			// Kinds is the kinds argument value.
+			Kinds []string
 			// EnvUUIDs is the envUUIDs argument value.
 			EnvUUIDs []string
 		}
-		// ListPermanentByArtifactKind holds details about calls to the ListPermanentByArtifactKind method.
-		ListPermanentByArtifactKind []struct {
+		// ListPermanentByArtifactKinds holds details about calls to the ListPermanentByArtifactKinds method.
+		ListPermanentByArtifactKinds []struct {
 			// OuID is the ouID argument value.
 			OuID string
-			// Kind is the kind argument value.
-			Kind string
+			// Kinds is the kinds argument value.
+			Kinds []string
+		}
+		// ReplaceIfUnchanged holds details about calls to the ReplaceIfUnchanged method.
+		ReplaceIfUnchanged []struct {
+			// Key is the key argument value.
+			Key *models.StoredAPIKey
+			// PrevHash is the prevHash argument value.
+			PrevHash string
+		}
+		// Transaction holds details about calls to the Transaction method.
+		Transaction []struct {
+			// Ctx is the ctx argument value.
+			Ctx context.Context
+			// Fn is the fn argument value.
+			Fn func(repo repositories.APIKeyRepository, tx *gorm.DB) error
 		}
 		// Upsert holds details about calls to the Upsert method.
 		Upsert []struct {
@@ -128,14 +186,18 @@ type APIKeyRepositoryMock struct {
 			Key *models.StoredAPIKey
 		}
 	}
-	lockDelete                      sync.RWMutex
-	lockGetByArtifactAndName        sync.RWMutex
-	lockListByApplicationUUID       sync.RWMutex
-	lockListByArtifact              sync.RWMutex
-	lockListByArtifactKind          sync.RWMutex
-	lockListByArtifactKindAndEnvs   sync.RWMutex
-	lockListPermanentByArtifactKind sync.RWMutex
-	lockUpsert                      sync.RWMutex
+	lockDelete                       sync.RWMutex
+	lockGetByArtifactAndName         sync.RWMutex
+	lockInsert                       sync.RWMutex
+	lockListActiveByArtifactTx       sync.RWMutex
+	lockListByApplicationUUID        sync.RWMutex
+	lockListByArtifact               sync.RWMutex
+	lockListByArtifactKind           sync.RWMutex
+	lockListByArtifactKindAndEnvs    sync.RWMutex
+	lockListPermanentByArtifactKinds sync.RWMutex
+	lockReplaceIfUnchanged           sync.RWMutex
+	lockTransaction                  sync.RWMutex
+	lockUpsert                       sync.RWMutex
 }
 
 // Delete calls DeleteFunc.
@@ -207,6 +269,82 @@ func (mock *APIKeyRepositoryMock) GetByArtifactAndNameCalls() []struct {
 	mock.lockGetByArtifactAndName.RLock()
 	calls = mock.calls.GetByArtifactAndName
 	mock.lockGetByArtifactAndName.RUnlock()
+	return calls
+}
+
+// Insert calls InsertFunc.
+func (mock *APIKeyRepositoryMock) Insert(key *models.StoredAPIKey) error {
+	if mock.InsertFunc == nil {
+		panic("APIKeyRepositoryMock.InsertFunc: method is nil but APIKeyRepository.Insert was just called")
+	}
+	callInfo := struct {
+		Key *models.StoredAPIKey
+	}{
+		Key: key,
+	}
+	mock.lockInsert.Lock()
+	mock.calls.Insert = append(mock.calls.Insert, callInfo)
+	mock.lockInsert.Unlock()
+	return mock.InsertFunc(key)
+}
+
+// InsertCalls gets all the calls that were made to Insert.
+// Check the length with:
+//
+//	len(mockedAPIKeyRepository.InsertCalls())
+func (mock *APIKeyRepositoryMock) InsertCalls() []struct {
+	Key *models.StoredAPIKey
+} {
+	var calls []struct {
+		Key *models.StoredAPIKey
+	}
+	mock.lockInsert.RLock()
+	calls = mock.calls.Insert
+	mock.lockInsert.RUnlock()
+	return calls
+}
+
+// ListActiveByArtifactTx calls ListActiveByArtifactTxFunc.
+func (mock *APIKeyRepositoryMock) ListActiveByArtifactTx(ctx context.Context, tx *gorm.DB, artifactUUID uuid.UUID, now time.Time) ([]models.StoredAPIKey, error) {
+	if mock.ListActiveByArtifactTxFunc == nil {
+		panic("APIKeyRepositoryMock.ListActiveByArtifactTxFunc: method is nil but APIKeyRepository.ListActiveByArtifactTx was just called")
+	}
+	callInfo := struct {
+		Ctx          context.Context
+		Tx           *gorm.DB
+		ArtifactUUID uuid.UUID
+		Now          time.Time
+	}{
+		Ctx:          ctx,
+		Tx:           tx,
+		ArtifactUUID: artifactUUID,
+		Now:          now,
+	}
+	mock.lockListActiveByArtifactTx.Lock()
+	mock.calls.ListActiveByArtifactTx = append(mock.calls.ListActiveByArtifactTx, callInfo)
+	mock.lockListActiveByArtifactTx.Unlock()
+	return mock.ListActiveByArtifactTxFunc(ctx, tx, artifactUUID, now)
+}
+
+// ListActiveByArtifactTxCalls gets all the calls that were made to ListActiveByArtifactTx.
+// Check the length with:
+//
+//	len(mockedAPIKeyRepository.ListActiveByArtifactTxCalls())
+func (mock *APIKeyRepositoryMock) ListActiveByArtifactTxCalls() []struct {
+	Ctx          context.Context
+	Tx           *gorm.DB
+	ArtifactUUID uuid.UUID
+	Now          time.Time
+} {
+	var calls []struct {
+		Ctx          context.Context
+		Tx           *gorm.DB
+		ArtifactUUID uuid.UUID
+		Now          time.Time
+	}
+	mock.lockListActiveByArtifactTx.RLock()
+	calls = mock.calls.ListActiveByArtifactTx
+	mock.lockListActiveByArtifactTx.RUnlock()
 	return calls
 }
 
@@ -315,23 +453,23 @@ func (mock *APIKeyRepositoryMock) ListByArtifactKindCalls() []struct {
 }
 
 // ListByArtifactKindAndEnvs calls ListByArtifactKindAndEnvsFunc.
-func (mock *APIKeyRepositoryMock) ListByArtifactKindAndEnvs(ouID string, kind string, envUUIDs []string) ([]models.StoredAPIKey, error) {
+func (mock *APIKeyRepositoryMock) ListByArtifactKindAndEnvs(ouID string, kinds []string, envUUIDs []string) ([]models.StoredAPIKey, error) {
 	if mock.ListByArtifactKindAndEnvsFunc == nil {
 		panic("APIKeyRepositoryMock.ListByArtifactKindAndEnvsFunc: method is nil but APIKeyRepository.ListByArtifactKindAndEnvs was just called")
 	}
 	callInfo := struct {
 		OuID     string
-		Kind     string
+		Kinds    []string
 		EnvUUIDs []string
 	}{
 		OuID:     ouID,
-		Kind:     kind,
+		Kinds:    kinds,
 		EnvUUIDs: envUUIDs,
 	}
 	mock.lockListByArtifactKindAndEnvs.Lock()
 	mock.calls.ListByArtifactKindAndEnvs = append(mock.calls.ListByArtifactKindAndEnvs, callInfo)
 	mock.lockListByArtifactKindAndEnvs.Unlock()
-	return mock.ListByArtifactKindAndEnvsFunc(ouID, kind, envUUIDs)
+	return mock.ListByArtifactKindAndEnvsFunc(ouID, kinds, envUUIDs)
 }
 
 // ListByArtifactKindAndEnvsCalls gets all the calls that were made to ListByArtifactKindAndEnvs.
@@ -340,12 +478,12 @@ func (mock *APIKeyRepositoryMock) ListByArtifactKindAndEnvs(ouID string, kind st
 //	len(mockedAPIKeyRepository.ListByArtifactKindAndEnvsCalls())
 func (mock *APIKeyRepositoryMock) ListByArtifactKindAndEnvsCalls() []struct {
 	OuID     string
-	Kind     string
+	Kinds    []string
 	EnvUUIDs []string
 } {
 	var calls []struct {
 		OuID     string
-		Kind     string
+		Kinds    []string
 		EnvUUIDs []string
 	}
 	mock.lockListByArtifactKindAndEnvs.RLock()
@@ -354,39 +492,111 @@ func (mock *APIKeyRepositoryMock) ListByArtifactKindAndEnvsCalls() []struct {
 	return calls
 }
 
-// ListPermanentByArtifactKind calls ListPermanentByArtifactKindFunc.
-func (mock *APIKeyRepositoryMock) ListPermanentByArtifactKind(ouID string, kind string) ([]models.StoredAPIKey, error) {
-	if mock.ListPermanentByArtifactKindFunc == nil {
-		panic("APIKeyRepositoryMock.ListPermanentByArtifactKindFunc: method is nil but APIKeyRepository.ListPermanentByArtifactKind was just called")
+// ListPermanentByArtifactKinds calls ListPermanentByArtifactKindsFunc.
+func (mock *APIKeyRepositoryMock) ListPermanentByArtifactKinds(ouID string, kinds []string) ([]models.StoredAPIKey, error) {
+	if mock.ListPermanentByArtifactKindsFunc == nil {
+		panic("APIKeyRepositoryMock.ListPermanentByArtifactKindsFunc: method is nil but APIKeyRepository.ListPermanentByArtifactKinds was just called")
 	}
 	callInfo := struct {
-		OuID string
-		Kind string
+		OuID  string
+		Kinds []string
 	}{
-		OuID: ouID,
-		Kind: kind,
+		OuID:  ouID,
+		Kinds: kinds,
 	}
-	mock.lockListPermanentByArtifactKind.Lock()
-	mock.calls.ListPermanentByArtifactKind = append(mock.calls.ListPermanentByArtifactKind, callInfo)
-	mock.lockListPermanentByArtifactKind.Unlock()
-	return mock.ListPermanentByArtifactKindFunc(ouID, kind)
+	mock.lockListPermanentByArtifactKinds.Lock()
+	mock.calls.ListPermanentByArtifactKinds = append(mock.calls.ListPermanentByArtifactKinds, callInfo)
+	mock.lockListPermanentByArtifactKinds.Unlock()
+	return mock.ListPermanentByArtifactKindsFunc(ouID, kinds)
 }
 
-// ListPermanentByArtifactKindCalls gets all the calls that were made to ListPermanentByArtifactKind.
+// ListPermanentByArtifactKindsCalls gets all the calls that were made to ListPermanentByArtifactKinds.
 // Check the length with:
 //
-//	len(mockedAPIKeyRepository.ListPermanentByArtifactKindCalls())
-func (mock *APIKeyRepositoryMock) ListPermanentByArtifactKindCalls() []struct {
-	OuID string
-	Kind string
+//	len(mockedAPIKeyRepository.ListPermanentByArtifactKindsCalls())
+func (mock *APIKeyRepositoryMock) ListPermanentByArtifactKindsCalls() []struct {
+	OuID  string
+	Kinds []string
 } {
 	var calls []struct {
-		OuID string
-		Kind string
+		OuID  string
+		Kinds []string
 	}
-	mock.lockListPermanentByArtifactKind.RLock()
-	calls = mock.calls.ListPermanentByArtifactKind
-	mock.lockListPermanentByArtifactKind.RUnlock()
+	mock.lockListPermanentByArtifactKinds.RLock()
+	calls = mock.calls.ListPermanentByArtifactKinds
+	mock.lockListPermanentByArtifactKinds.RUnlock()
+	return calls
+}
+
+// ReplaceIfUnchanged calls ReplaceIfUnchangedFunc.
+func (mock *APIKeyRepositoryMock) ReplaceIfUnchanged(key *models.StoredAPIKey, prevHash string) error {
+	if mock.ReplaceIfUnchangedFunc == nil {
+		panic("APIKeyRepositoryMock.ReplaceIfUnchangedFunc: method is nil but APIKeyRepository.ReplaceIfUnchanged was just called")
+	}
+	callInfo := struct {
+		Key      *models.StoredAPIKey
+		PrevHash string
+	}{
+		Key:      key,
+		PrevHash: prevHash,
+	}
+	mock.lockReplaceIfUnchanged.Lock()
+	mock.calls.ReplaceIfUnchanged = append(mock.calls.ReplaceIfUnchanged, callInfo)
+	mock.lockReplaceIfUnchanged.Unlock()
+	return mock.ReplaceIfUnchangedFunc(key, prevHash)
+}
+
+// ReplaceIfUnchangedCalls gets all the calls that were made to ReplaceIfUnchanged.
+// Check the length with:
+//
+//	len(mockedAPIKeyRepository.ReplaceIfUnchangedCalls())
+func (mock *APIKeyRepositoryMock) ReplaceIfUnchangedCalls() []struct {
+	Key      *models.StoredAPIKey
+	PrevHash string
+} {
+	var calls []struct {
+		Key      *models.StoredAPIKey
+		PrevHash string
+	}
+	mock.lockReplaceIfUnchanged.RLock()
+	calls = mock.calls.ReplaceIfUnchanged
+	mock.lockReplaceIfUnchanged.RUnlock()
+	return calls
+}
+
+// Transaction calls TransactionFunc.
+func (mock *APIKeyRepositoryMock) Transaction(ctx context.Context, fn func(repo repositories.APIKeyRepository, tx *gorm.DB) error) error {
+	if mock.TransactionFunc == nil {
+		panic("APIKeyRepositoryMock.TransactionFunc: method is nil but APIKeyRepository.Transaction was just called")
+	}
+	callInfo := struct {
+		Ctx context.Context
+		Fn  func(repo repositories.APIKeyRepository, tx *gorm.DB) error
+	}{
+		Ctx: ctx,
+		Fn:  fn,
+	}
+	mock.lockTransaction.Lock()
+	mock.calls.Transaction = append(mock.calls.Transaction, callInfo)
+	mock.lockTransaction.Unlock()
+	return mock.TransactionFunc(ctx, fn)
+}
+
+// TransactionCalls gets all the calls that were made to Transaction.
+// Check the length with:
+//
+//	len(mockedAPIKeyRepository.TransactionCalls())
+func (mock *APIKeyRepositoryMock) TransactionCalls() []struct {
+	Ctx context.Context
+	Fn  func(repo repositories.APIKeyRepository, tx *gorm.DB) error
+} {
+	var calls []struct {
+		Ctx context.Context
+		Fn  func(repo repositories.APIKeyRepository, tx *gorm.DB) error
+	}
+	mock.lockTransaction.RLock()
+	calls = mock.calls.Transaction
+	mock.lockTransaction.RUnlock()
 	return calls
 }
 

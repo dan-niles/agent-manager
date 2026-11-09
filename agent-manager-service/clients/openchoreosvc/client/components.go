@@ -29,6 +29,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/wso2/agent-manager/agent-manager-service/workloadpolicy"
+
 	"github.com/wso2/agent-manager/agent-manager-service/clients/openchoreosvc/gen"
 	"github.com/wso2/agent-manager/agent-manager-service/config"
 	"github.com/wso2/agent-manager/agent-manager-service/instrumentation"
@@ -37,6 +39,9 @@ import (
 )
 
 func (c *openChoreoClient) CreateComponent(ctx context.Context, ouID, projectName string, req CreateComponentRequest) error {
+	if err := workloadpolicy.Check(ctx, ouID); err != nil {
+		return err
+	}
 	namespaceName := c.NamespaceFor(ouID)
 	createComponentReqBody, err := buildCreateComponentRequestBody(namespaceName, projectName, req)
 	if err != nil {
@@ -173,10 +178,6 @@ func buildExternalAgentComponentRequestBody(namespaceName, projectName string, r
 	}
 	labels := map[string]string{
 		string(LabelKeyProvisioningType): string(req.ProvisioningType),
-	}
-	// Only the subtype AMS acts on is labelled; other external subtypes stay free-form.
-	if utils.IsA2AAgentSubType(req.AgentType.SubType) {
-		labels[string(LabelKeyAgentSubType)] = req.AgentType.SubType
 	}
 	addUserLabels(labels, req.Labels)
 	componentTypeKind := gen.ComponentSpecComponentTypeKindComponentType
@@ -472,7 +473,95 @@ func buildWorkflowParameters(req CreateComponentRequest) (map[string]any, error)
 	}
 	params["endpoints"] = endpoints
 
+	// Add health checks, when sent, so the first build records them
+	setHealthChecksWorkflowParameter(params, req.HealthChecks)
+
 	return params, nil
+}
+
+// workflowParamHealthChecks is the build parameter holding the agent's health checks. Every
+// build copies the build parameters into its record, so each build keeps its own checks.
+const workflowParamHealthChecks = "healthChecks"
+
+// setHealthChecksWorkflowParameter saves the health checks in the build parameters, replacing
+// any saved ones. Empty health checks remove the saved ones, so the next build uses the
+// defaults. Nil leaves the build parameters unchanged.
+func setHealthChecksWorkflowParameter(params map[string]any, healthChecks *HealthChecksConfig) {
+	if healthChecks == nil {
+		return
+	}
+	healthChecksParam := map[string]any{}
+	if healthChecks.Startup != nil {
+		healthChecksParam["startup"] = healthCheckToWorkflowParameter(healthChecks.Startup)
+	}
+	if healthChecks.Readiness != nil {
+		healthChecksParam["readiness"] = healthCheckToWorkflowParameter(healthChecks.Readiness)
+	}
+	if healthChecks.Liveness != nil {
+		healthChecksParam["liveness"] = healthCheckToWorkflowParameter(healthChecks.Liveness)
+	}
+	if len(healthChecksParam) == 0 {
+		delete(params, workflowParamHealthChecks)
+		return
+	}
+	params[workflowParamHealthChecks] = healthChecksParam
+}
+
+// healthCheckToWorkflowParameter turns one health check into the value saved in the build
+// parameters, keeping only the fields that are set. Its field names are the ones the
+// agent-api ComponentType reads.
+func healthCheckToWorkflowParameter(healthCheck *HealthCheckConfig) map[string]any {
+	healthCheckParam := map[string]any{}
+	if healthCheck.Enabled != nil {
+		healthCheckParam["enabled"] = *healthCheck.Enabled
+	}
+	if healthCheck.Type != nil {
+		healthCheckParam["type"] = *healthCheck.Type
+	}
+	if healthCheck.Path != nil {
+		healthCheckParam["path"] = *healthCheck.Path
+	}
+	if healthCheck.Port != nil {
+		healthCheckParam["port"] = *healthCheck.Port
+	}
+	if healthCheck.InitialDelaySeconds != nil {
+		healthCheckParam["initialDelaySeconds"] = *healthCheck.InitialDelaySeconds
+	}
+	if healthCheck.PeriodSeconds != nil {
+		healthCheckParam["periodSeconds"] = *healthCheck.PeriodSeconds
+	}
+	if healthCheck.TimeoutSeconds != nil {
+		healthCheckParam["timeoutSeconds"] = *healthCheck.TimeoutSeconds
+	}
+	if healthCheck.FailureThreshold != nil {
+		healthCheckParam["failureThreshold"] = *healthCheck.FailureThreshold
+	}
+	return healthCheckParam
+}
+
+// healthChecksFromWorkflowParameters reads the saved health checks from the build parameters.
+// Returns nil when none are saved.
+func healthChecksFromWorkflowParameters(params map[string]any) (*models.HealthChecks, error) {
+	return healthChecksFromMap(params)
+}
+
+// healthChecksFromMap reads the "healthChecks" entry of a map that holds them under the API's
+// field names: an agent's build parameters, or a binding's component-type configs. Returns nil
+// when there is none.
+func healthChecksFromMap(values map[string]any) (*models.HealthChecks, error) {
+	value, ok := values[workflowParamHealthChecks]
+	if !ok || value == nil {
+		return nil, nil //nolint:nilnil // documented contract: nil means "none saved", not an error
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read saved health checks: %w", err)
+	}
+	var healthChecks models.HealthChecks
+	if err := json.Unmarshal(encoded, &healthChecks); err != nil {
+		return nil, fmt.Errorf("failed to read saved health checks: %w", err)
+	}
+	return &healthChecks, nil
 }
 
 func isGoogleBuildpack(language string) bool {
@@ -644,6 +733,57 @@ func normalizePath(path string) string {
 // is relative to the repository root (as expected by the workflow).
 func resolveDockerfilePath(appPath, dockerfilePath string) string {
 	return normalizePath(appPath) + "/" + strings.TrimPrefix(normalizePath(dockerfilePath), "/")
+}
+
+// ComponentReconcileBlock describes a Ready=False condition that stops OpenChoreo from cutting
+// new ComponentReleases for a component.
+type ComponentReconcileBlock struct {
+	Reason  string
+	Message string
+}
+
+// GetComponentReconcileBlock returns the blocking Ready condition for a component, or nil when it
+// reconciles normally. An absent Ready condition counts as not blocked — the component simply has
+// not been reconciled yet, which is not evidence of a problem.
+func (c *openChoreoClient) GetComponentReconcileBlock(ctx context.Context, ouID, componentName string) (*ComponentReconcileBlock, error) {
+	namespaceName := c.NamespaceFor(ouID)
+	resp, err := c.ocClient.GetComponentWithResponse(ctx, namespaceName, componentName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get component resource: %w", err)
+	}
+	if resp.StatusCode() != http.StatusOK {
+		return nil, handleErrorResponse(resp.StatusCode(), ErrorResponses{
+			JSON401: resp.JSON401,
+			JSON403: resp.JSON403,
+			JSON404: resp.JSON404,
+			JSON500: resp.JSON500,
+		})
+	}
+	if resp.JSON200 == nil || resp.JSON200.Status == nil {
+		return nil, nil //nolint:nilnil // documented contract: a nil block means "not blocked", not an error
+	}
+	return reconcileBlockFromConditions(resp.JSON200.Status.Conditions), nil
+}
+
+// reconcileBlockFromConditions returns the blocking Ready condition, or nil when none applies.
+func reconcileBlockFromConditions(conditions *[]gen.Condition) *ComponentReconcileBlock {
+	if conditions == nil {
+		return nil
+	}
+	for _, cond := range *conditions {
+		if cond.Type != BindingStatusReady || cond.Status != "False" {
+			continue
+		}
+		if _, blocking := componentBlockingReasons[cond.Reason]; !blocking {
+			continue
+		}
+		block := &ComponentReconcileBlock{Reason: cond.Reason}
+		if cond.Message != nil {
+			block.Message = *cond.Message
+		}
+		return block
+	}
+	return nil
 }
 
 func (c *openChoreoClient) GetComponent(ctx context.Context, ouID, projectName, componentName string) (*models.AgentResponse, error) {
@@ -1297,46 +1437,77 @@ func (c *openChoreoClient) DeleteComponent(ctx context.Context, ouID, projectNam
 
 func (c *openChoreoClient) ListComponents(ctx context.Context, ouID, projectName string) ([]*models.AgentResponse, error) {
 	namespaceName := c.NamespaceFor(ouID)
-	resp, err := c.ocClient.ListComponentsWithResponse(ctx, namespaceName, &gen.ListComponentsParams{
-		Project: &projectName,
-		Limit:   &defaultListLimit,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to list components: %w", err)
-	}
-	if resp.StatusCode() != http.StatusOK {
-		return nil, handleErrorResponse(resp.StatusCode(), ErrorResponses{
-			JSON401: resp.JSON401,
-			JSON403: resp.JSON403,
-			JSON404: resp.JSON404,
-			JSON500: resp.JSON500,
+	// OpenChoreo pages the list, so reading only the first page would drop every agent
+	// past it once a project outgrows one page, and callers would total and paginate a
+	// truncated set. Follow the cursor so they always see the complete set, and fail
+	// rather than return part of it.
+	components := []*models.AgentResponse{}
+	var cursor *gen.CursorParam
+	seen := map[string]bool{}
+	for page := 0; page < maxListPages; page++ {
+		resp, err := c.ocClient.ListComponentsWithResponse(ctx, namespaceName, &gen.ListComponentsParams{
+			Project: &projectName,
+			Limit:   &defaultListLimit,
+			Cursor:  cursor,
 		})
-	}
-	if resp.JSON200 == nil || len(resp.JSON200.Items) == 0 {
-		return []*models.AgentResponse{}, nil
-	}
-
-	components := make([]*models.AgentResponse, 0, len(resp.JSON200.Items))
-	for i := range resp.JSON200.Items {
-		item := &resp.JSON200.Items[i]
-		if isTerminating(item.Metadata) {
-			// Already deleted and waiting on its cleanup finalizer — see isTerminating.
-			continue
-		}
-		if item.Spec == nil || !isAgentComponentType(item.Spec.ComponentType.Name) {
-			// Projects are shared across WSO2 Cloud products, so a project can contain
-			// components other products created (e.g. a plain "deployment/service").
-			// Agent Manager should only ever list components it itself provisions.
-			continue
-		}
-		comp, err := convertComponentFromTyped(item)
 		if err != nil {
-			slog.Error("failed to convert component", "component", item.Metadata.Name, "error", err)
-			continue
+			return nil, fmt.Errorf("failed to list components: %w", err)
 		}
-		components = append(components, comp)
+		if resp.StatusCode() != http.StatusOK {
+			return nil, handleErrorResponse(resp.StatusCode(), ErrorResponses{
+				JSON401: resp.JSON401,
+				JSON403: resp.JSON403,
+				JSON404: resp.JSON404,
+				JSON500: resp.JSON500,
+			})
+		}
+		if resp.JSON200 == nil {
+			// A 200 with no list body (not JSON) is an empty project only on the first page;
+			// on a later one the list was cut short, and returning the earlier pages would
+			// be the partial result this loop exists to avoid.
+			if page == 0 {
+				return components, nil
+			}
+			return nil, fmt.Errorf("failed to list components: page %d returned no component list", page+1)
+		}
+
+		for i := range resp.JSON200.Items {
+			item := &resp.JSON200.Items[i]
+			if isTerminating(item.Metadata) {
+				// Already deleted and waiting on its cleanup finalizer — see isTerminating.
+				continue
+			}
+			if item.Spec == nil || !isAgentComponentType(item.Spec.ComponentType.Name) {
+				// Projects are shared across WSO2 Cloud products, so a project can contain
+				// components other products created (e.g. a plain "deployment/service").
+				// Agent Manager should only ever list components it itself provisions.
+				continue
+			}
+			comp, err := convertComponentFromTyped(item)
+			if err != nil {
+				slog.Error("failed to convert component", "component", item.Metadata.Name, "error", err)
+				continue
+			}
+			components = append(components, comp)
+		}
+
+		nextCursor := resp.JSON200.Pagination.NextCursor
+		if nextCursor == nil || *nextCursor == "" {
+			return components, nil
+		}
+		// A cursor already followed would list the same agents again, round and round;
+		// fail rather than return duplicates and a wrong total.
+		if seen[*nextCursor] {
+			return nil, fmt.Errorf("failed to list components: pagination cursor %q repeated", *nextCursor)
+		}
+		seen[*nextCursor] = true
+		next := gen.CursorParam(*nextCursor)
+		cursor = &next
 	}
-	return components, nil
+	// Still more pages after the cap: a project this large, or a server that never ends the
+	// list. Either way the set is incomplete, and callers total and paginate it.
+	return nil, fmt.Errorf("failed to list components: project %s has more than %d pages of components",
+		projectName, maxListPages)
 }
 
 // CountProjectComponents counts every component in the project, whichever product created it.
@@ -2033,6 +2204,52 @@ func (c *openChoreoClient) UpdateReleaseBindingEnvVars(ctx context.Context, ouID
 	return nil
 }
 
+// GetComponentBaseEnvVars reads the saved Component workflow variables without environment overrides.
+func (c *openChoreoClient) GetComponentBaseEnvVars(ctx context.Context, ouID, componentName string) ([]EnvVar, error) {
+	namespaceName := c.NamespaceFor(ouID)
+	resp, err := c.ocClient.GetComponentWithResponse(ctx, namespaceName, componentName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get component: %w", err)
+	}
+	if resp.StatusCode() != http.StatusOK {
+		return nil, handleErrorResponse(resp.StatusCode(), ErrorResponses{
+			JSON401: resp.JSON401,
+			JSON403: resp.JSON403,
+			JSON404: resp.JSON404,
+			JSON500: resp.JSON500,
+		})
+	}
+	if resp.JSON200 == nil || resp.JSON200.Spec == nil {
+		return nil, fmt.Errorf("invalid component response")
+	}
+
+	result := make([]EnvVar, 0)
+	workflow := resp.JSON200.Spec.Workflow
+	if workflow == nil || workflow.Parameters == nil {
+		return result, nil
+	}
+	raw, ok := (*workflow.Parameters)["environmentVariables"]
+	if !ok {
+		return result, nil
+	}
+	data, err := json.Marshal(raw)
+	if err != nil {
+		return nil, fmt.Errorf("encode Component environment variables: %w", err)
+	}
+	var entries []struct {
+		Name      string
+		Value     string
+		ValueFrom *EnvVarValueFrom
+	}
+	if err := json.Unmarshal(data, &entries); err != nil {
+		return nil, fmt.Errorf("decode Component environment variables: %w", err)
+	}
+	for _, entry := range entries {
+		result = append(result, EnvVar{Key: entry.Name, Value: entry.Value, ValueFrom: entry.ValueFrom})
+	}
+	return result, nil
+}
+
 // RemoveComponentEnvironmentVariables removes the specified env var keys from the component's
 // workflow parameters and updates the component CR.
 func (c *openChoreoClient) RemoveComponentEnvironmentVariables(ctx context.Context, ouID, projectName, componentName string, envVarKeys []string) error {
@@ -2714,17 +2931,17 @@ func (c *openChoreoClient) buildEnvInjectionTraitParameters(opts ...TraitOption)
 	for _, opt := range opts {
 		opt(params)
 	}
-	agentApiKeySecretRef, _ := params["agentApiKeySecretRef"].(string)
-	if agentApiKeySecretRef == "" {
-		return nil, fmt.Errorf("agent API key secret reference is required for env injection trait")
-	}
 
 	// otelEndpoint is no longer set here — the env-injection trait derives it from the
 	// apiGatewayName convention ("api-platform-<org>-<env>") + the gateway runtime
 	// in-cluster Service. The trait still honours an explicit override via
 	// environmentConfigs.otelEndpoint / parameters.otelEndpoint when set.
-	result := map[string]interface{}{
-		"agentApiKeySecretRef": agentApiKeySecretRef,
+	//
+	// The agent API key's remote store path is set only for agents created before the key
+	// moved to the agent's env vars; the trait delivers the key itself only when it has one.
+	result := map[string]interface{}{}
+	if v, ok := params["agentApiKeySecretRef"].(string); ok && v != "" {
+		result["agentApiKeySecretRef"] = v
 	}
 	if v, ok := params["agentApiKeySecretProperty"].(string); ok && v != "" {
 		result["agentApiKeySecretProperty"] = v
@@ -3109,7 +3326,10 @@ func convertComponentFromTyped(comp *gen.Component) (*models.AgentResponse, erro
 		Type:     componentTypeName,
 		Language: getLabel(comp.Metadata.Labels, string(LabelKeyAgentLanguage)),
 	}
-	agentType.SubType = getLabel(comp.Metadata.Labels, string(LabelKeyAgentSubType))
+	// An external agent has no subtype; a label left from when A2A was one is ignored.
+	if provisioningType != string(utils.ExternalAgent) {
+		agentType.SubType = getLabel(comp.Metadata.Labels, string(LabelKeyAgentSubType))
+	}
 
 	agent := &models.AgentResponse{
 		Name:        comp.Metadata.Name,
@@ -3151,6 +3371,13 @@ func convertComponentFromTyped(comp *gen.Component) (*models.AgentResponse, erro
 					agent.InputInterface.Visibility = inputInterface.Visibility
 				}
 			}
+			// A saved value that can't be read is left out rather than failing: callers drop an
+			// agent that fails to convert from the agent list, and builds copy the value as is.
+			healthChecks, err := healthChecksFromWorkflowParameters(params)
+			if err != nil {
+				slog.Warn("failed to read saved health checks", "component", comp.Metadata.Name, "error", err)
+			}
+			agent.HealthChecks = healthChecks
 		}
 	}
 

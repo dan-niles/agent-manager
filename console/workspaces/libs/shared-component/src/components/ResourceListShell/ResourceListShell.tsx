@@ -19,14 +19,12 @@ import React, { useEffect, useRef } from "react";
 import { ConsoleAction, useTrack } from "@agent-management-platform/api-client";
 import {
   Alert,
-  Box,
-  Button,
   ListingTable,
   SearchBar,
   Skeleton,
   Stack,
 } from "@wso2/oxygen-ui";
-import { AlertTriangle, Plus, Search } from "@wso2/oxygen-ui-icons-react";
+import { AlertTriangle, Search } from "@wso2/oxygen-ui-icons-react";
 
 export interface ResourceListEmptyState {
   illustration: React.ReactNode;
@@ -48,13 +46,6 @@ export interface ResourceListShellProps {
   searchPlaceholder?: string;
   /** Greys out the search input; useful while the list is still loading. */
   searchDisabled?: boolean;
-  /** Right-aligned button rendered next to the search bar. */
-  addButton?: {
-    label: string;
-    to?: string;
-    onClick?: () => void;
-    component?: React.ElementType;
-  };
   /** A render override for the toolbar — when provided, replaces the default toolbar entirely. */
   toolbar?: React.ReactNode;
 
@@ -73,6 +64,11 @@ export interface ResourceListShellProps {
 
   /** The "happy path" content (typically a ListingTable). */
   children: React.ReactNode;
+  /**
+   * Set when the list already sits inside a box (a tabbed card, say), so its
+   * empty, search-empty and error states don't draw a second one.
+   */
+  disablePaper?: boolean;
 }
 
 const DEFAULT_LOADING_ROWS = 5;
@@ -111,9 +107,8 @@ export const ResourceListShell: React.FC<ResourceListShellProps> = ({
   resourceName = "unspecified",
   searchValue,
   onSearchChange,
-  searchPlaceholder = "Search...",
+  searchPlaceholder = "Search",
   searchDisabled,
-  addButton,
   toolbar,
   error,
   isLoading,
@@ -123,6 +118,7 @@ export const ResourceListShell: React.FC<ResourceListShellProps> = ({
   emptyState,
   searchEmptyState,
   children,
+  disablePaper = false,
 }) => {
   const { track } = useTrack();
 
@@ -156,40 +152,23 @@ export const ResourceListShell: React.FC<ResourceListShellProps> = ({
   }, [isLoading, error, isEmpty, isSearchEmpty, resourceName, track]);
 
   const resolvedToolbar = toolbar ?? (
-    <Stack direction="row" spacing={1} alignItems="center">
-      <Box flexGrow={1}>
-        <SearchBar
-          key="search-bar"
-          placeholder={searchPlaceholder}
-          size="small"
-          fullWidth
-          value={searchValue}
-          onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-            onSearchChange(e.target.value)
-          }
-          disabled={searchDisabled}
-        />
-      </Box>
-      {addButton && (
-        <Button
-          {...(addButton.component
-            ? { component: addButton.component, to: addButton.to }
-            : {})}
-          onClick={addButton.onClick}
-          variant="contained"
-          color="primary"
-          startIcon={<Plus size={16} />}
-        >
-          {addButton.label}
-        </Button>
-      )}
-    </Stack>
+    <SearchBar
+      key="search-bar"
+      placeholder={searchPlaceholder}
+      size="small"
+      width="standard"
+      value={searchValue}
+      onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+        onSearchChange(e.target.value)
+      }
+      disabled={searchDisabled}
+    />
   );
 
   const renderBody = () => {
     if (error) {
       return (
-        <ListingTable.Container>
+        <ListingTable.Container disablePaper={disablePaper}>
           <Alert
             severity="error"
             icon={<AlertTriangle size={18} />}
@@ -213,7 +192,7 @@ export const ResourceListShell: React.FC<ResourceListShellProps> = ({
 
     if (isEmpty) {
       return (
-        <ListingTable.Container>
+        <ListingTable.Container disablePaper={disablePaper}>
           <ListingTable.EmptyState
             illustration={emptyState.illustration}
             title={emptyState.title}
@@ -231,7 +210,7 @@ export const ResourceListShell: React.FC<ResourceListShellProps> = ({
         description: "Try a different keyword or clear the search filter.",
       };
       return (
-        <ListingTable.Container>
+        <ListingTable.Container disablePaper={disablePaper}>
           <ListingTable.EmptyState
             illustration={empty.illustration}
             title={empty.title}
@@ -248,9 +227,14 @@ export const ResourceListShell: React.FC<ResourceListShellProps> = ({
       </ListingTable.Container>
     );
   };
+  // A list with nothing in it has nothing to search or filter, so the toolbar
+  // would only offer dead controls beside the empty state. It stays while
+  // loading and on error, where the count isn't settled yet.
+  const showToolbar = Boolean(error) || isLoading || !isEmpty;
+
   return (
     <Stack spacing={1}>
-      {resolvedToolbar}
+      {showToolbar && resolvedToolbar}
       {renderBody()}
     </Stack>
   );

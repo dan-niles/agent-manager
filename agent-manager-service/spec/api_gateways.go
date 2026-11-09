@@ -557,6 +557,8 @@ Register a new AI gateway with the platform.
 - Credentials are never returned in API responses
 - Use a strong encryption key configured in GATEWAY_ENCRYPTION_KEY
 
+A gateway serves exactly one environment: `environmentIds` takes at most one environment.
+
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
 	@param orgName Organization name/handle
 	@return ApiRegisterGatewayRequest
@@ -654,6 +656,17 @@ func (a *GatewaysAPIService) RegisterGatewayExecute(r ApiRegisterGatewayRequest)
 			return localVarReturnValue, localVarHTTPResponse, newErr
 		}
 		if localVarHTTPResponse.StatusCode == 401 {
+			var v ErrorResponse
+			err = a.client.decode(&v, localVarBody, localVarHTTPResponse.Header.Get("Content-Type"))
+			if err != nil {
+				newErr.error = err.Error()
+				return localVarReturnValue, localVarHTTPResponse, newErr
+			}
+			newErr.error = formatErrorMessage(localVarHTTPResponse.Status, &v)
+			newErr.model = v
+			return localVarReturnValue, localVarHTTPResponse, newErr
+		}
+		if localVarHTTPResponse.StatusCode == 403 {
 			var v ErrorResponse
 			err = a.client.decode(&v, localVarBody, localVarHTTPResponse.Header.Get("Content-Type"))
 			if err != nil {

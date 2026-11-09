@@ -26,10 +26,14 @@ import {
 import {
   useGetMCPProxy,
   useListEnvironments,
+  useListGateways,
   useUpdateMCPProxy,
 } from "@agent-management-platform/api-client";
+import { useResourceAccess } from "@agent-management-platform/feature-management";
 import {
   absoluteRouteMap,
+  isSelfHostedGateway,
+  stripBasePath,
   type Environment,
   type MCPEndpointConfig,
   type MCPProxyEndpoint,
@@ -65,7 +69,11 @@ import {
   useParams,
   useSearchParams,
 } from "react-router-dom";
-import { normalizeVersion } from "@agent-management-platform/shared-component";
+import {
+  environmentLabel,
+  normalizeVersion,
+  uniqueEnvironments,
+} from "@agent-management-platform/shared-component";
 import {
   CreatedMetadata,
   PageLayout,
@@ -76,7 +84,7 @@ import { MCPProxyOverviewTab } from "./MCPProxyOverviewTab";
 import { MCPProxyPoliciesTab } from "./MCPProxyPoliciesTab";
 import { MCPProxyRewriteTab } from "./MCPProxyRewriteTab";
 import { MCPProxySecurityTab } from "./MCPProxySecurityTab";
-import { EditMCPProxyDrawer } from "./EditMCPProxyDrawer";
+import { getCapabilityId } from "./mcpEndpoints";
 import { useCopyWithFeedback } from "./useCopyWithFeedback";
 
 // slug is a URL-safe stand-in for each tab, so the selected tab (and
@@ -176,7 +184,9 @@ export function ViewMCPProxy() {
         setPendingLeave(() => () => {
           leaving = true;
           // Replace the sentinel so it doesn't linger as a stray history entry.
-          navigate(`${target.pathname}${target.search}${target.hash}`, {
+          // target.pathname is the browser path (base path included); navigate
+          // re-applies the basename, so strip it first.
+          navigate(`${stripBasePath(target.pathname)}${target.search}${target.hash}`, {
             replace: replace || isSentinel(),
             state,
           });
@@ -235,7 +245,6 @@ export function ViewMCPProxy() {
     [guardUnsaved, setSearchParams],
   );
 
-  const [editDrawerOpen, setEditDrawerOpen] = useState(false);
   const handleCopy = useCopyWithFeedback();
 
   const {
@@ -250,6 +259,7 @@ export function ViewMCPProxy() {
     orgName: orgId ?? "",
   });
   const updateMCPProxy = useUpdateMCPProxy();
+  const { canWrite } = useResourceAccess("mcp_server");
 
   const endpoints = useMemo<MCPProxyEndpoint[]>(
     () => proxy?.endpoints ?? [],
@@ -281,6 +291,27 @@ export function ViewMCPProxy() {
     [endpoints, selectedEndpointId],
   );
 
+  // The selected endpoint's own MCP versions; an endpoint saved without them uses the proxy's
+  // mcpSpecVersion, as the gateway does.
+  const selectedEndpointSpecVersions = useMemo<string[]>(() => {
+    if (selectedEndpoint?.mcpSpecVersions?.length) return selectedEndpoint.mcpSpecVersions;
+    return proxy?.mcpSpecVersion ? [proxy.mcpSpecVersion] : [];
+  }, [selectedEndpoint, proxy?.mcpSpecVersion]);
+
+  // Tools of the proxy's other endpoints. A scope covers the tools of every endpoint, so the
+  // security tab needs them to keep them when it saves the selected endpoint's assignments.
+  const otherEndpointTools = useMemo(() => {
+    const names = new Set<string>();
+    for (const endpoint of endpoints) {
+      if (endpoint.id === selectedEndpointId) continue;
+      for (const raw of endpoint.capabilities?.tools ?? []) {
+        const name = getCapabilityId("tool", raw);
+        if (name) names.add(name);
+      }
+    }
+    return [...names];
+  }, [endpoints, selectedEndpointId]);
+
   // The selected endpoint's flat config, consumed by every config tab. Environment
   // bindings and per-env deployment status are surfaced separately as chips.
   const selectedConfig: MCPEndpointConfig | undefined = selectedEndpoint;
@@ -301,7 +332,7 @@ export function ViewMCPProxy() {
     () =>
       selectedEnvironmentBindings.map(({ binding, env }) => ({
         id: binding.environmentUuid,
-        label: env?.displayName ?? env?.name ?? binding.environmentUuid,
+        label: environmentLabel(env) || binding.environmentUuid,
         status: binding.deploymentStatus,
       })),
     [selectedEnvironmentBindings],
@@ -312,12 +343,24 @@ export function ViewMCPProxy() {
   // from every environment this MCP Server is actually reachable from.
   const selectedEnvironments = useMemo(
     () =>
-      selectedEnvironmentBindings
-        .filter(({ binding }) => binding.deploymentStatus === "Deployed")
-        .map(({ env }) => env)
-        .filter((env): env is Environment => !!env),
+      uniqueEnvironments(
+        selectedEnvironmentBindings
+          .filter(({ binding }) => binding.deploymentStatus === "Deployed")
+          .map(({ env }) => env)
+          .filter((env): env is Environment => !!env),
+      ),
     [selectedEnvironmentBindings],
   );
+
+  const { data: gatewaysData } = useListGateways({ orgName: orgId ?? "" });
+  const isOnSelfHostedGateway = useMemo(() => {
+    const selfHostedIds = new Set(
+      (gatewaysData?.gateways ?? []).filter(isSelfHostedGateway).map((gw) => gw.uuid),
+    );
+    return (selectedEndpoint?.environments ?? []).some(
+      (binding) => !!binding.gatewayId && selfHostedIds.has(binding.gatewayId),
+    );
+  }, [gatewaysData, selectedEndpoint]);
 
   // Merge-and-save callback used by every config tab. It merges a partial into the
   // selected endpoint's flat config and PUTs the whole proxy with that one endpoint
@@ -360,10 +403,9 @@ export function ViewMCPProxy() {
   return (
     <>
       <PageLayout
-        variant="card"
         title={displayName}
         backHref={backHref}
-        backLabel="Back to MCP Servers"
+        backLabel="Back to MCP servers"
         isLoading={isLoading}
         titleTail={
           proxy?.version ? (
@@ -386,14 +428,22 @@ export function ViewMCPProxy() {
           <CreatedMetadata createdAt={proxy?.createdAt} />
         }
         actions={
-          proxy ? (
+          proxy && canWrite ? (
             <Button
               variant="outlined"
               size="small"
               startIcon={<Edit size={16} />}
-              onClick={() => setEditDrawerOpen(true)}
+              onClick={() =>
+                navigate(
+                  generatePath(
+                    absoluteRouteMap.children.org.children.mcpProxies.children.view
+                      .children.edit.path,
+                    { orgId: orgId ?? "", proxyId: routeProxyId },
+                  ),
+                )
+              }
             >
-              Edit MCP Server
+              Edit MCP server
             </Button>
           ) : undefined
         }
@@ -415,6 +465,39 @@ export function ViewMCPProxy() {
 
         {proxy && !error && (
           <Stack spacing={4}>
+            {endpoints.length > 1 && (
+              <Stack
+                direction="row"
+                spacing={1}
+                alignItems="center"
+                justifyContent="flex-end"
+                flexWrap="wrap"
+                useFlexGap
+              >
+                <FormControl size="small" sx={{ minWidth: 260 }}>
+                  <Select
+                    value={selectedEndpointId}
+                    onChange={(event) => {
+                      const endpointId = event.target.value as string;
+                      guardUnsaved(() => setSelectedEndpointId(endpointId));
+                    }}
+                    renderValue={(value) => {
+                      const option = endpointOptions.find(
+                        (o) => o.id === value,
+                      );
+                      return `${option?.label ?? value} Endpoint`;
+                    }}
+                  >
+                    {endpointOptions.map((option) => (
+                      <MenuItem key={option.id} value={option.id}>
+                        {option.label}
+                      </MenuItem>
+                    ))}
+                  </Select>
+                </FormControl>
+              </Stack>
+            )}
+
             <Grid container spacing={2}>
               <Grid size={{ xs: 12, sm: 6 }}>
                 <Card variant="outlined" sx={{ p: 2, height: "100%" }}>
@@ -462,51 +545,18 @@ export function ViewMCPProxy() {
                       color="text.secondary"
                       sx={{ fontWeight: 500 }}
                     >
-                      MCP Spec Version
+                      MCP Spec Versions
                     </Typography>
                     <Typography
                       variant="body2"
                       sx={{ fontFamily: "monospace" }}
                     >
-                      {proxy.mcpSpecVersion || "—"}
+                      {selectedEndpointSpecVersions.join(", ") || "—"}
                     </Typography>
                   </Stack>
                 </Card>
               </Grid>
             </Grid>
-
-            {endpoints.length > 1 && (
-              <Stack
-                direction="row"
-                spacing={1}
-                alignItems="center"
-                justifyContent="flex-end"
-                flexWrap="wrap"
-                useFlexGap
-              >
-                <FormControl size="small" sx={{ minWidth: 260 }}>
-                  <Select
-                    value={selectedEndpointId}
-                    onChange={(event) => {
-                      const endpointId = event.target.value as string;
-                      guardUnsaved(() => setSelectedEndpointId(endpointId));
-                    }}
-                    renderValue={(value) => {
-                      const option = endpointOptions.find(
-                        (o) => o.id === value,
-                      );
-                      return `${option?.label ?? value} Endpoint`;
-                    }}
-                  >
-                    {endpointOptions.map((option) => (
-                      <MenuItem key={option.id} value={option.id}>
-                        {option.label}
-                      </MenuItem>
-                    ))}
-                  </Select>
-                </FormControl>
-              </Stack>
-            )}
 
             {hasEndpoints ? (
               <Card variant="outlined">
@@ -572,6 +622,8 @@ export function ViewMCPProxy() {
                       orgName={orgId}
                       proxyId={routeProxyId}
                       environments={selectedEnvironments}
+                      otherEndpointTools={otherEndpointTools}
+                      isOnSelfHostedGateway={isOnSelfHostedGateway}
                       isLoading={isTabContentLoading}
                       onUpdate={updateSelectedEndpointConfig}
                       isUpdating={updateMCPProxy.isPending}
@@ -610,16 +662,6 @@ export function ViewMCPProxy() {
           </Stack>
         )}
       </PageLayout>
-
-      {proxy && orgId && (
-        <EditMCPProxyDrawer
-          open={editDrawerOpen}
-          onClose={() => setEditDrawerOpen(false)}
-          proxy={proxy}
-          orgId={orgId}
-          environments={environments}
-        />
-      )}
 
       <Dialog open={pendingLeave !== null} onClose={handleStay}>
         <DialogTitle>You have unsaved changes</DialogTitle>

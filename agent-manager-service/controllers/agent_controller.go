@@ -24,8 +24,12 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/wso2/agent-manager/agent-manager-service/workloadpolicy"
+
 	"github.com/wso2/agent-manager/agent-manager-service/audit"
+	"github.com/wso2/agent-manager/agent-manager-service/clients/thundersvc"
 	"github.com/wso2/agent-manager/agent-manager-service/config"
+	"github.com/wso2/agent-manager/agent-manager-service/events"
 	"github.com/wso2/agent-manager/agent-manager-service/middleware"
 	"github.com/wso2/agent-manager/agent-manager-service/middleware/growthanalytics"
 	"github.com/wso2/agent-manager/agent-manager-service/middleware/logger"
@@ -71,20 +75,52 @@ type AgentController interface {
 type agentController struct {
 	agentService     services.AgentManagerService
 	agentKindService services.AgentKindService
+	eventsCleaner    services.EventsCleaner
 }
 
 // NewAgentController returns a new AgentController instance.
-func NewAgentController(agentService services.AgentManagerService, agentKindService services.AgentKindService) AgentController {
+func NewAgentController(
+	agentService services.AgentManagerService,
+	agentKindService services.AgentKindService,
+	eventsCleaner services.EventsCleaner,
+) AgentController {
 	return &agentController{
 		agentService:     agentService,
 		agentKindService: agentKindService, // kept for PublishKind
+		eventsCleaner:    eventsCleaner,
 	}
 }
 
 // handleCommonErrors checks for common resource errors and writes appropriate responses.
 // If no common error matches, writes an internal server error with the provided fallback message.
+// entitlementDeniedMessage returns the message the subscription check gave for
+// a refused create, or a generic one when it gave none.
+func entitlementDeniedMessage(err error) string {
+	var denied *utils.EntitlementDeniedError
+	if errors.As(err, &denied) && denied.Message != "" {
+		return denied.Message
+	}
+	return "Your subscription does not allow this. Upgrade your subscription to continue."
+}
+
+// writeSubscriptionSuspended answers a request refused because the
+// organization's subscription is suspended (workloadpolicy.ErrSuspended). Every
+// controller uses it, so the message and code stay the same everywhere.
+func writeSubscriptionSuspended(w http.ResponseWriter) {
+	utils.WriteErrorResponseWithReason(w, http.StatusForbidden,
+		"The Agent Manager subscription is suspended", "Renew the subscription to resume", "SUBSCRIPTION_SUSPENDED")
+}
+
+// handleCommonErrors writes the HTTP error response for the sentinel errors the agent services
+// return, and a 500 with fallbackMsg for anything else.
 func handleCommonErrors(w http.ResponseWriter, err error, fallbackMsg string) {
 	switch {
+	case errors.Is(err, utils.ErrWorkloadSecretSyncUnconfirmed):
+		utils.WriteErrorResponseWithReason(w, http.StatusServiceUnavailable,
+			"Secret values were saved, but the rollout stopped because secret sync could not be confirmed.",
+			"", utils.ErrCodeServiceUnavailable)
+	case errors.Is(err, workloadpolicy.ErrSuspended):
+		writeSubscriptionSuspended(w)
 	// A ValidationError raised below the controller (e.g. a stored agent kind
 	// version that can't be written as a label) is still a client-side problem —
 	// report it as a 400 naming the offending value instead of letting it reach
@@ -97,6 +133,10 @@ func handleCommonErrors(w http.ResponseWriter, err error, fallbackMsg string) {
 	// user-facing Message with "Invalid input provided".
 	case utils.IsValidationError(err) != nil:
 		utils.WriteValidationErrorResponse(w, err)
+
+	case errors.Is(err, utils.ErrEntitlementDenied):
+		utils.WriteErrorResponseWithReason(w, http.StatusPaymentRequired,
+			entitlementDeniedMessage(err), "", utils.ErrCodeEntitlementDenied)
 
 	// Not found errors
 	case errors.Is(err, utils.ErrOrganizationNotFound):
@@ -146,6 +186,9 @@ func handleCommonErrors(w http.ResponseWriter, err error, fallbackMsg string) {
 	case errors.Is(err, utils.ErrProjectHasAssociatedAgents):
 		utils.WriteErrorResponseWithReason(w, http.StatusConflict,
 			"Project has associated agents", err.Error(), utils.ErrCodeConflict)
+	case errors.Is(err, utils.ErrDeploymentPipelineAlreadyExists):
+		utils.WriteErrorResponseWithReason(w, http.StatusConflict,
+			"A deployment pipeline with this name already exists. Choose a different name.", "", utils.ErrCodeConflict)
 	case errors.Is(err, utils.ErrDeploymentPipelineInUse):
 		utils.WriteErrorResponseWithReason(w, http.StatusConflict,
 			"Deployment pipeline is referenced by one or more projects", err.Error(), utils.ErrCodeConflict)
@@ -205,6 +248,18 @@ func handleCommonErrors(w http.ResponseWriter, err error, fallbackMsg string) {
 	case errors.Is(err, utils.ErrDeploymentInProgress):
 		utils.WriteErrorResponseWithReason(w, http.StatusConflict,
 			"A deployment is already in progress", err.Error(), utils.ErrCodeConflict)
+	case errors.Is(err, utils.ErrComponentNotReconcilable):
+		utils.WriteErrorResponseWithReason(w, http.StatusConflict,
+			"Agent cannot be deployed in its current state", err.Error(), utils.ErrCodeConflict)
+	case errors.Is(err, utils.ErrPromotionNeedsRedeploy):
+		// The console's promote drawer shows only the message, so it carries the steps too.
+		utils.WriteErrorResponseWithReason(w, http.StatusConflict,
+			"Agent must be deployed again before this promotion: deploy the agent again, promote it up to "+
+				"the source environment if that is not the first environment, then retry this promotion",
+			err.Error(), utils.ErrCodeConflict)
+	case errors.Is(err, utils.ErrEnvironmentHasNoGateway):
+		utils.WriteErrorResponseWithReason(w, http.StatusConflict,
+			"Environment has no ingress gateway", err.Error(), utils.ErrCodeEnvironmentHasNoGateway)
 
 	// Authorization errors
 	case errors.Is(err, utils.ErrUnauthorized):
@@ -526,6 +581,9 @@ func (c *agentController) DeleteAgent(w http.ResponseWriter, r *http.Request) {
 		handleCommonErrors(w, err, "Failed to delete agent")
 		return
 	}
+	if c.eventsCleaner != nil {
+		c.eventsCleaner.RemoveForAgent(ctx, ouID, projName, agentName)
+	}
 	utils.WriteSuccessResponse(w, http.StatusNoContent, "")
 }
 
@@ -652,6 +710,7 @@ func (c *agentController) UpdateAgentDeploySettings(w http.ResponseWriter, r *ht
 		utils.WriteErrorResponse(w, http.StatusBadRequest, "environmentName is required")
 		return
 	}
+	events.SetEnvironment(ctx, payload.EnvironmentName)
 
 	if err := c.agentService.UpdateAgentDeploySettings(ctx, ouID, projName, agentName, &payload); err != nil {
 		log.Error("UpdateAgentDeploySettings: failed to update deploy settings", "error", err)
@@ -679,6 +738,7 @@ func (c *agentController) UpdateAgentConfigurations(w http.ResponseWriter, r *ht
 		utils.WriteErrorResponse(w, http.StatusBadRequest, "environmentName is required")
 		return
 	}
+	events.SetEnvironment(ctx, payload.EnvironmentName)
 
 	if err := c.agentService.UpdateAgentConfigurations(ctx, ouID, projName, agentName, &payload); err != nil {
 		log.Error("UpdateAgentConfigurations: failed to update configurations", "error", err)
@@ -1417,6 +1477,16 @@ func (c *agentController) GetAgentRoles(w http.ResponseWriter, r *http.Request) 
 			utils.WriteErrorResponse(w, http.StatusNotFound, "Agent identity not yet provisioned for this environment")
 			return
 		}
+		if errors.Is(err, thundersvc.ErrThunderNotProvisioned) {
+			// The environment has no identity provider yet, so the agent holds no roles there.
+			log.Warn("GetAgentRoles: the environment has no identity provider", "orgName", orgName, "agentName", agentName, "envID", envID)
+			utils.WriteErrorResponse(w, http.StatusNotFound, "The identity provider is not set up for this environment yet")
+			return
+		}
+		if errors.Is(err, services.ErrIdentityRoleUnavailable) {
+			utils.WriteErrorResponse(w, http.StatusServiceUnavailable, "Identity management is not configured for this deployment")
+			return
+		}
 		log.Error("GetAgentRoles: failed to get agent roles", "orgName", orgName, "agentName", agentName, "envID", envID, "error", err)
 		handleCommonErrors(w, err, "Failed to get agent roles")
 		return
@@ -1454,6 +1524,16 @@ func (c *agentController) GetAgentGroups(w http.ResponseWriter, r *http.Request)
 		if errors.Is(err, utils.ErrAgentIdentityNotProvisioned) {
 			log.Warn("GetAgentGroups: identity not yet provisioned", "orgName", orgName, "agentName", agentName, "envID", envID)
 			utils.WriteErrorResponse(w, http.StatusNotFound, "Agent identity not yet provisioned for this environment")
+			return
+		}
+		if errors.Is(err, thundersvc.ErrThunderNotProvisioned) {
+			// The environment has no identity provider yet, so the agent holds no groups there.
+			log.Warn("GetAgentGroups: the environment has no identity provider", "orgName", orgName, "agentName", agentName, "envID", envID)
+			utils.WriteErrorResponse(w, http.StatusNotFound, "The identity provider is not set up for this environment yet")
+			return
+		}
+		if errors.Is(err, services.ErrIdentityGroupUnavailable) {
+			utils.WriteErrorResponse(w, http.StatusServiceUnavailable, "Identity management is not configured for this deployment")
 			return
 		}
 		log.Error("GetAgentGroups: failed to get agent groups", "orgName", orgName, "agentName", agentName, "envID", envID, "error", err)

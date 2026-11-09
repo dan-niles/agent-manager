@@ -20,6 +20,7 @@ export enum MountPoints {
     ComponentLevelPage = "component-level-page",
     OrgLevelPage = "org-level-page",
     ProjectLevelPage = "project-level-page",
+    TopStartPanel = "top-start-panel",
     TopLeftPanel = "top-left-panel",
     TopRightPanel = "top-right-panel",
     TopLogo = "top-logo",
@@ -31,4 +32,8 @@ export enum MountPoints {
     // drawers are used (the self-hosted default).
     EnvironmentCreateDrawer = "environment-create-drawer",
     EnvironmentDeleteDrawer = "environment-delete-drawer",
+    // A deployment can inject its own private-repository source component (repo URL,
+    // branch, app path and credential selection) at this mount point. When nothing is
+    // injected, the built-in PAT git-secret UI is used (the self-hosted default).
+    PrivateRepoSource = "private-repo-source",
 }

@@ -39,24 +39,44 @@ import (
 	"github.com/wso2/agent-manager/agent-manager-service/config"
 	"github.com/wso2/agent-manager/agent-manager-service/db"
 	dbmigrations "github.com/wso2/agent-manager/agent-manager-service/db_migrations"
+	"github.com/wso2/agent-manager/agent-manager-service/events"
 	"github.com/wso2/agent-manager/agent-manager-service/middleware"
 	"github.com/wso2/agent-manager/agent-manager-service/resources"
 	"github.com/wso2/agent-manager/agent-manager-service/server"
 	"github.com/wso2/agent-manager/agent-manager-service/services"
 	"github.com/wso2/agent-manager/agent-manager-service/signals"
 	"github.com/wso2/agent-manager/agent-manager-service/wiring"
+	"github.com/wso2/agent-manager/agent-manager-service/workloadpolicy"
 
 	"go.uber.org/automaxprocs/maxprocs"
 	"gorm.io/gorm"
 )
 
+// The migration job usually finishes within a minute of the pod starting; the
+// timeout only stops a wait that can never succeed from hanging forever.
+const (
+	migrationWaitTimeout  = 10 * time.Minute
+	migrationWaitInterval = 2 * time.Second
+)
+
 // Options holds the configuration options for running the application.
 // These are typically parsed from command-line flags in main.
 type Options struct {
+	// WorkloadGuard is inherited by authenticated requests and background workers.
+	WorkloadGuard workloadpolicy.Guard
+	// APIMiddleware wraps the authenticated API mux before dispatch.
+	APIMiddleware func(*http.ServeMux) http.Handler
+	// StartBackground starts deployment-specific workers before the scheduler.
+	// The returned cleanup runs during shutdown.
+	StartBackground func(context.Context, *wiring.AppParams) (func(), error)
+
 	// Server indicates whether to start the HTTP server
 	Server bool
 	// Migrate indicates whether to run database migrations before starting
 	Migrate bool
+	// WaitForMigrations blocks until another process has applied this build's
+	// migrations, for an init container that runs ahead of the server
+	WaitForMigrations bool
 	// ExtraAPIRoutes registers additional routes onto the authenticated /api/v1 sub-mux.
 	// Use this to inject deployment-specific routes without modifying the core handler.
 	ExtraAPIRoutes func(mux *http.ServeMux, params *wiring.AppParams)
@@ -69,6 +89,27 @@ type Options struct {
 	// management and OAuth endpoints. nil preserves on-premises behavior. Run
 	// automatically applies it to endpoint-aware provisioning implementations.
 	EnvThunderEndpointResolver thundersvc.EnvThunderEndpointResolver
+	// ProjectAgentIdentityProvider enables project-scoped AgentID creation in
+	// CP_MANAGED mode. nil is the safe default for LEGACY_DIRECT deployments.
+	ProjectAgentIdentityProvider services.ProjectAgentIdentityProvider
+	// MCPResourceServerProvider registers MCP resource servers through an identity
+	// control plane. It is used only when IDENTITY_MANAGEMENT_MODE is CP_MANAGED; in
+	// LEGACY_DIRECT mode (the default) MCP resource servers are registered in each
+	// environment's own Thunder and this is ignored. CP_MANAGED without it reports
+	// MCP resource servers as unavailable and never uses the per-environment Thunder.
+	MCPResourceServerProvider services.MCPResourceServerProvider
+	// IdentityRoleProvider keeps agent identity roles, and the MCP scopes assigned to them, on an
+	// identity control plane. It is used only when IDENTITY_MANAGEMENT_MODE is CP_MANAGED; in
+	// LEGACY_DIRECT mode (the default) roles are in each environment's own Thunder and this is
+	// ignored. CP_MANAGED without it reports role listing and scope assignment as unavailable and
+	// never uses the per-environment Thunder.
+	IdentityRoleProvider services.IdentityRoleProvider
+	// IdentityGroupProvider manages the groups of an environment, their members and the roles
+	// they hold through an identity control plane. It is used only when IDENTITY_MANAGEMENT_MODE
+	// is CP_MANAGED; in LEGACY_DIRECT mode (the default) groups are in each environment's own
+	// Thunder and this is ignored. CP_MANAGED without it reports group management as unavailable
+	// and never uses the per-environment Thunder.
+	IdentityGroupProvider services.IdentityGroupProvider
 	// BackgroundContextDecorator optionally marks contexts created for trusted
 	// background workers. Request contexts never pass through this hook.
 	BackgroundContextDecorator func(context.Context) context.Context
@@ -92,6 +133,11 @@ type Options struct {
 	// deployment-specific component source binding. nil preserves the standard
 	// anonymous/static-token and PAT-backed repository behavior.
 	RepositoryCommitProvider services.RepositoryCommitProvider
+	// EntitlementChecker asks whether the organization's subscription allows an
+	// agent create. nil (the open-source default) allows every create; cloud
+	// deployments inject a check against their billing system. See
+	// services.EntitlementChecker.
+	EntitlementChecker services.EntitlementChecker
 	// ResourceLabels are stamped on every Component and ReleaseBinding Agent
 	// Manager writes to OpenChoreo. nil (the open-source default) stamps none;
 	// cloud deployments inject their own, e.g. the product label WSO2 Cloud's
@@ -138,9 +184,28 @@ func Run(authProvider occlient.AuthProvider, secretProvider secretmanagersvc.Pro
 		}
 	}
 
+	if opts.WaitForMigrations {
+		ctx, cancel := context.WithTimeout(context.Background(), migrationWaitTimeout)
+		err := dbmigrations.WaitForLatest(ctx, migrationWaitInterval)
+		cancel()
+		if err != nil {
+			slog.Error("database migrations did not complete; check that the migration job runs the same image version as this server",
+				"error", err)
+			os.Exit(1)
+		}
+	}
+
 	if !opts.Server {
 		return
 	}
+	if cfg.IdentityManagementMode == string(thundersvc.IdentityManagementCPManaged) && opts.AgentThunderProvisioning == nil {
+		slog.Error("CP_MANAGED identity mode requires an AgentID provisioning implementation")
+		os.Exit(1)
+	}
+
+	services.SetMCPResourceServerProvider(thundersvc.IdentityManagementMode(cfg.IdentityManagementMode), opts.MCPResourceServerProvider)
+	services.SetIdentityRoleProvider(thundersvc.IdentityManagementMode(cfg.IdentityManagementMode), opts.IdentityRoleProvider)
+	services.SetIdentityGroupProvider(thundersvc.IdentityManagementMode(cfg.IdentityManagementMode), opts.IdentityGroupProvider)
 
 	// Get the raw DB instance without context - repositories will add context per-operation
 	database := db.GetDB()
@@ -181,6 +246,17 @@ func Run(authProvider occlient.AuthProvider, secretProvider secretmanagersvc.Pro
 			os.Exit(1)
 		}
 		agentThunderProvisioning = opts.AgentThunderProvisioning(database, secretMgmtClientForProvisioning, ocClientForProvisioning, encryptionKey)
+		if setter, ok := agentThunderProvisioning.(services.ProjectAgentIdentityProviderSetter); ok {
+			if err := setter.SetProjectAgentIdentityProvider(
+				thundersvc.IdentityManagementMode(cfg.IdentityManagementMode), opts.ProjectAgentIdentityProvider,
+			); err != nil {
+				slog.Error("failed to configure project AgentID provisioning", "error", err)
+				os.Exit(1)
+			}
+		} else if cfg.IdentityManagementMode == string(thundersvc.IdentityManagementCPManaged) {
+			slog.Error("AgentID provisioning implementation does not support CP_MANAGED mode")
+			os.Exit(1)
+		}
 		if setter, ok := agentThunderProvisioning.(services.EnvThunderEndpointResolverSetter); ok {
 			setter.SetEnvThunderEndpointResolver(opts.EnvThunderEndpointResolver)
 		}
@@ -205,6 +281,7 @@ func Run(authProvider occlient.AuthProvider, secretProvider secretmanagersvc.Pro
 		setter.SetWorkloadInjector(dependencies.AgentIdentityInjectionService)
 	}
 	dependencies.RepositoryService.SetCommitProvider(opts.RepositoryCommitProvider)
+	dependencies.AgentManagerService.SetEntitlementChecker(opts.EntitlementChecker)
 
 	// Background workers have no request behind them, so nothing installs a
 	// recorder on their contexts the way the HTTP middleware does. Install one
@@ -214,6 +291,32 @@ func Run(authProvider occlient.AuthProvider, secretProvider secretmanagersvc.Pro
 	backgroundCtx := audit.WithRecorder(context.Background(), dependencies.AuditRecorder)
 	if opts.BackgroundContextDecorator != nil {
 		backgroundCtx = opts.BackgroundContextDecorator(backgroundCtx)
+	}
+	// The workload guard goes on the background context before anything takes
+	// it: the build publisher's OpenChoreo calls are derived from this context,
+	// so a guard installed later would let a build of a suspended organization
+	// publish.
+	backgroundCtx = workloadpolicy.WithGuard(backgroundCtx, opts.WorkloadGuard)
+	// The build publisher acts for a build token's organization with this
+	// service's own credential, which only the background context may use; it
+	// derives each request's OpenChoreo calls from this context. The build token
+	// issuer stores each token with that credential too. Both are installed before
+	// the HTTP server starts below, so no request sees them change.
+	if setter, ok := dependencies.BuildPublisherService.(services.BuildPublisherBackgroundContextSetter); ok {
+		setter.SetBackgroundContext(backgroundCtx)
+	}
+	if setter, ok := dependencies.BuildTokenIssuer.(services.BuildTokenIssuerBackgroundContextSetter); ok {
+		setter.SetBackgroundContext(backgroundCtx)
+	}
+
+	stopBackground := func() {}
+	if opts.StartBackground != nil {
+		var err error
+		stopBackground, err = opts.StartBackground(backgroundCtx, dependencies)
+		if err != nil {
+			slog.Error("failed to start deployment workers", "error", err)
+			os.Exit(1)
+		}
 	}
 
 	// So a rotated agent's deferred pod rollout (see RefreshAfterRotation)
@@ -241,21 +344,29 @@ func Run(authProvider occlient.AuthProvider, secretProvider secretmanagersvc.Pro
 		}
 	}
 
-	// Start the A2A publication reconciler. It runs unconditionally: it is a
-	// no-op for an org with no A2A agents, and gating it on a feature flag would
-	// leave a deploy's queued publication stranded if the flag were ever off.
-	a2aReconcilerCtx, a2aReconcilerCancel := context.WithCancel(backgroundCtx)
-	if err := dependencies.A2APublicationReconciler.Start(a2aReconcilerCtx); err != nil {
-		slog.Error("failed to start A2A publication reconciler", "error", err)
-		os.Exit(1)
-	}
-
-	// Started unconditionally, like the publication reconciler that feeds it.
+	// Started unconditionally: it is a no-op for an org with no A2A agents.
 	a2aCardReconcilerCtx, a2aCardReconcilerCancel := context.WithCancel(backgroundCtx)
 	if err := dependencies.A2ACardReconciler.Start(a2aCardReconcilerCtx); err != nil {
 		slog.Error("failed to start A2A card reconciler", "error", err)
 		os.Exit(1)
 	}
+
+	deploymentTimeoutSweeperCtx, deploymentTimeoutSweeperCancel := context.WithCancel(backgroundCtx)
+	if err := dependencies.DeploymentTimeoutSweeper.Start(deploymentTimeoutSweeperCtx); err != nil {
+		slog.Error("failed to start deployment timeout sweeper", "error", err)
+		os.Exit(1)
+	}
+
+	reconcileWorkerCtx, reconcileWorkerCancel := context.WithCancel(backgroundCtx)
+	if err := dependencies.ReconcileWorker.Start(reconcileWorkerCtx); err != nil {
+		slog.Error("failed to start reconcile worker", "error", err)
+		os.Exit(1)
+	}
+	// Start publishing events. The bus is set up in the background, so a NATS
+	// server that is still starting does not hold up the API; events raised
+	// meanwhile wait in the durable outbox.
+	eventsCtx, eventsCancel := context.WithCancel(backgroundCtx)
+	eventsStarted := startEvents(eventsCtx, dependencies)
 
 	// Load built-in LLM provider templates into memory
 	if err := loadBuiltInLLMTemplates(dependencies); err != nil {
@@ -266,7 +377,7 @@ func Run(authProvider occlient.AuthProvider, secretProvider secretmanagersvc.Pro
 	recordStartupPosture(dependencies.AuditRecorder)
 
 	// Create main API server handler
-	handler := api.MakeHTTPHandler(dependencies, opts.ExtraAPIRoutes)
+	handler := api.MakeHTTPHandlerWithPolicy(dependencies, opts.ExtraAPIRoutes, opts.APIMiddleware, opts.WorkloadGuard)
 	mainServer := &http.Server{
 		Addr:           fmt.Sprintf("%s:%d", cfg.ServerHost, cfg.ServerPort),
 		Handler:        handler,
@@ -300,7 +411,20 @@ func Run(authProvider occlient.AuthProvider, secretProvider secretmanagersvc.Pro
 		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer shutdownCancel()
 
-		// Stop scheduler first
+		// Drain both servers before stopping anything an in-flight request
+		// calls into: the reconcile worker (nudges, placement requests), the
+		// EventHub, the audit recorder.
+		// Gateway WebSockets are hijacked connections, which Shutdown neither
+		// waits for nor closes; the WebSocket manager closes them below.
+		if err := mainServer.Shutdown(shutdownCtx); err != nil {
+			slog.Error("Main server forced shutdown after timeout", "error", err)
+		}
+
+		if err := internalServer.Shutdown(shutdownCtx); err != nil {
+			slog.Error("Internal server forced shutdown after timeout", "error", err)
+		}
+
+		stopBackground()
 		schedulerCancel()
 		if err := dependencies.MonitorScheduler.Stop(); err != nil {
 			slog.Error("error stopping monitor scheduler", "error", err)
@@ -313,14 +437,19 @@ func Run(authProvider occlient.AuthProvider, secretProvider secretmanagersvc.Pro
 			}
 		}
 
-		a2aReconcilerCancel()
-		if err := dependencies.A2APublicationReconciler.Stop(); err != nil {
-			slog.Error("error stopping A2A publication reconciler", "error", err)
-		}
-
 		a2aCardReconcilerCancel()
 		if err := dependencies.A2ACardReconciler.Stop(); err != nil {
 			slog.Error("error stopping A2A card reconciler", "error", err)
+		}
+
+		deploymentTimeoutSweeperCancel()
+		if err := dependencies.DeploymentTimeoutSweeper.Stop(); err != nil {
+			slog.Error("error stopping deployment timeout sweeper", "error", err)
+		}
+
+		reconcileWorkerCancel()
+		if err := dependencies.ReconcileWorker.Stop(); err != nil {
+			slog.Error("error stopping reconcile worker", "error", err)
 		}
 
 		// Shutdown WebSocket manager in a goroutine since it blocks
@@ -343,27 +472,25 @@ func Run(authProvider occlient.AuthProvider, secretProvider secretmanagersvc.Pro
 			slog.Warn("WebSocket manager shutdown timed out")
 		}
 
-		// Close EventHub after WebSocket manager so in-flight events are not dropped
+		// Close EventHub after the servers drain, so events published by
+		// draining requests are still polled and delivered and the gateway
+		// registration prepared statement stays open, and after the WebSocket
+		// manager, so in-flight events are not dropped.
 		if dependencies.EventHub != nil {
 			if err := dependencies.EventHub.Close(); err != nil {
 				slog.Error("error closing EventHub", "error", err)
 			}
 		}
 
-		// Shutdown both servers using the same context
-		if err := mainServer.Shutdown(shutdownCtx); err != nil {
-			slog.Error("Main server forced shutdown after timeout", "error", err)
-		}
+		eventsCancel()
+		<-eventsStarted
+		stopEvents(dependencies)
 
-		if err := internalServer.Shutdown(shutdownCtx); err != nil {
-			slog.Error("Internal server forced shutdown after timeout", "error", err)
-		}
-
-		// Flush the audit buffer last. Both servers have stopped, so no further
-		// events can be produced and every in-flight request has finished
-		// recording. Draining any earlier would discard the audit records of the
-		// requests still being served — note this is deliberately not where
-		// EventHub.Close sits, which runs before the servers stop.
+		// Flush the audit buffer last. The servers have drained and the
+		// background workers have stopped, so no further events can be
+		// produced and every in-flight request has finished recording.
+		// Draining any earlier would discard the audit records of the requests
+		// still being served.
 		if dependencies.AuditRecorder != nil {
 			if err := dependencies.AuditRecorder.Close(shutdownCtx); err != nil {
 				slog.Error("error flushing audit recorder; some events may be lost", "error", err)
@@ -460,4 +587,78 @@ func loadBuiltInLLMTemplates(dependencies *wiring.AppParams) error {
 
 	slog.Info("Loaded built-in LLM provider templates into memory", "count", len(templates))
 	return nil
+}
+
+// startEvents sets up the event bus, retrying until it answers, then starts
+// the publisher, the event dispatcher and the monitor alerting. A no-op
+// with events off.
+func startEvents(ctx context.Context, deps *wiring.AppParams) <-chan struct{} {
+	done := make(chan struct{})
+	if deps.EventBus == nil {
+		close(done)
+		return done
+	}
+	go func() {
+		defer close(done)
+		// Setup provisions durable consumers as well as streams. Each step retries
+		// independently, so a transient consumer-creation failure cannot disable
+		// alerting until the next process restart.
+		steps := []struct {
+			name  string
+			start func(context.Context) error
+		}{
+			{"event bus", deps.EventBus.Setup},
+			{"event dispatcher", deps.EventDispatcher.Start},
+			{"monitor alerting", deps.MonitorAlerts.Start},
+		}
+		for _, step := range steps {
+			for {
+				if ctx.Err() != nil {
+					return
+				}
+				// The setup timeout must not become a worker's lifetime context.
+				var err error
+				if step.name == "event bus" {
+					setupCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+					err = step.start(setupCtx)
+					cancel()
+				} else {
+					err = step.start(ctx)
+				}
+				if err == nil {
+					break
+				}
+				slog.Warn("Event component not ready; retrying", "component", step.name, "error", err)
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(5 * time.Second):
+				}
+			}
+		}
+		if ctx.Err() == nil {
+			if publisher, ok := deps.EventPublisher.(*events.AsyncPublisher); ok {
+				publisher.Start()
+			}
+		}
+	}()
+	return done
+}
+
+// stopEvents stops the event dispatcher and the monitor alerting, flushes
+// queued events and closes the bus.
+func stopEvents(deps *wiring.AppParams) {
+	if deps.EventBus == nil {
+		return
+	}
+	if err := deps.EventDispatcher.Stop(); err != nil {
+		slog.Error("Failed to stop the event dispatcher", "error", err)
+	}
+	if err := deps.MonitorAlerts.Stop(); err != nil {
+		slog.Error("Failed to stop the monitor alerting", "error", err)
+	}
+	if publisher, ok := deps.EventPublisher.(*events.AsyncPublisher); ok {
+		publisher.Stop()
+	}
+	deps.EventBus.Close()
 }

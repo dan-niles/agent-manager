@@ -116,6 +116,12 @@ func (c *Client) PushSecret(ctx context.Context, location secretmanagersvc.Secre
 				Data:   data,
 				Labels: userLabels(metadata.Labels, metadata.ManagedBy),
 			}); updateErr != nil {
+				// The name is taken, yet the secret API cannot find a secret to
+				// update: the SecretReference was created outside this client.
+				if errors.Is(updateErr, utils.ErrNotFound) {
+					return "", fmt.Errorf("failed to update secret after create conflict: %w: %w",
+						secretmanagersvc.ErrReferenceNameTaken, updateErr)
+				}
 				return "", fmt.Errorf("failed to update secret after create conflict: %w", updateErr)
 			}
 			return name, nil
@@ -172,12 +178,18 @@ func (c *Client) PatchSecret(ctx context.Context, location secretmanagersvc.Secr
 // nil if the secret doesn't exist. Only deletes secrets whose managed-by label
 // matches the provided metadata.
 func (c *Client) DeleteSecret(ctx context.Context, location secretmanagersvc.SecretLocation, metadata *secretmanagersvc.SecretMetadata) error {
+	return c.DeleteSecretByName(ctx, location.OrgName, location.SecretRefName(), metadata)
+}
+
+// DeleteSecretByName deletes the secret whose SecretReference is named
+// secretRefName. Like DeleteSecret, it is idempotent and only deletes a secret
+// managed by metadata.ManagedBy.
+func (c *Client) DeleteSecretByName(ctx context.Context, orgName, secretRefName string, metadata *secretmanagersvc.SecretMetadata) error {
 	if err := validateMetadata(metadata); err != nil {
 		return err
 	}
 
-	name := location.SecretRefName()
-	existing, err := c.oc.GetSecret(ctx, location.OrgName, name)
+	existing, err := c.oc.GetSecret(ctx, orgName, secretRefName)
 	if err != nil {
 		if errors.Is(err, utils.ErrNotFound) {
 			return nil // Idempotent - already deleted
@@ -189,7 +201,7 @@ func (c *Client) DeleteSecret(ctx context.Context, location secretmanagersvc.Sec
 		return nil // Not managed by the specified owner, skip deletion
 	}
 
-	if err := c.oc.DeleteSecret(ctx, location.OrgName, name); err != nil {
+	if err := c.oc.DeleteSecret(ctx, orgName, secretRefName); err != nil {
 		if errors.Is(err, utils.ErrNotFound) {
 			return nil
 		}

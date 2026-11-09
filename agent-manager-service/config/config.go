@@ -127,6 +127,13 @@ type Config struct {
 
 	// Thunder admin API configuration for provisioning OAuth apps
 	Thunder ThunderConfig
+	// BuildClient configures the organization-scoped token a source build's
+	// workload step uses to call this service's build publisher endpoint instead
+	// of the OpenChoreo API. See BuildClientConfig.
+	BuildClient BuildClientConfig
+	// IdentityManagementMode controls project AgentID creation. Existing
+	// installations remain on direct environment-Thunder management.
+	IdentityManagementMode string
 
 	// RootOUHandle identifies the root/admin Organization Unit in Thunder.
 	// Client-credentials tokens issued to this OU are allowed to access any
@@ -148,6 +155,13 @@ type Config struct {
 	// hand platform-admin access to whoever claims it next. The OU ID does not
 	// move.
 	PlatformAdminOUID string
+
+	// DeploymentTimeout configures the sweeper that fails gateway deploys and undeploys the gateway never acked.
+	DeploymentTimeout DeploymentTimeoutConfig
+
+	// Reconcile configures the gateway reconcile worker: rendering owed deploys, placing environment-addressed
+	// artifacts on their gateways, and checking deployed artifacts for drift.
+	Reconcile ReconcileConfig
 
 	// GatewayFailureThresholdSeconds is how long a gateway must have been
 	// disconnected (is_active false) before it counts as failed. Configurable
@@ -192,6 +206,10 @@ type Config struct {
 	// Audit configures the audit trail.
 	Audit AuditConfig
 
+	// Events configures the platform event bus and the delivery of events to
+	// event destinations.
+	Events EventsConfig
+
 	// GatewayManifestCache configures where the gateway-reported policy manifest
 	// cache lives. The default in-memory backend is process-local and therefore
 	// inconsistent across replicas — set Backend to "redis" in HA deployments.
@@ -215,6 +233,27 @@ type Config struct {
 	EvalJobsUsePublicGatewayURL bool
 }
 
+// DeploymentTimeoutConfig sets how often the timeout sweeper runs and how long a DEPLOYING or UNDEPLOYING row may
+// wait for the gateway's ack before it is FAILED with DEPLOYMENT_TIMEOUT.
+type DeploymentTimeoutConfig struct {
+	SweepIntervalSeconds int
+	TimeoutSeconds       int
+}
+
+// ReconcileConfig sets the reconcile worker's intervals, the render claim's lease and the render attempt budget.
+type ReconcileConfig struct {
+	// RenderIntervalSeconds is how often due renders are claimed; a save also nudges the worker.
+	RenderIntervalSeconds int
+	// PlaceIntervalSeconds is how often the fleet-wide placement pass runs; mapping a gateway places at once.
+	PlaceIntervalSeconds int
+	// DriftIntervalSeconds is how often one replica checks deployed artifacts for drift.
+	DriftIntervalSeconds int
+	// RenderLeaseSeconds is how long a claimed render is held before another replica may claim it again.
+	RenderLeaseSeconds int
+	// RenderAttemptBudget is how many failed renders give up a deploy. Waiting for an input never counts.
+	RenderAttemptBudget int
+}
+
 // GatewayManifestCacheConfig selects and configures the backend for the
 // gateway-manifest cache (see services.GatewayManifestCacheBackend).
 type GatewayManifestCacheConfig struct {
@@ -233,6 +272,43 @@ type GatewayManifestCacheRedisConfig struct {
 	Password   string `json:"-"`
 	DB         int
 	TLSEnabled bool
+}
+
+// Event bus modes.
+const (
+	// EventsModeNATS connects to a NATS server (EVENTS_NATS_URL), with
+	// JetStream streams on disk.
+	EventsModeNATS = "nats"
+	// EventsModeEmbedded runs NATS inside the process with JetStream in
+	// memory: no server to run, but queued events are lost on restart and it
+	// supports one replica only. For quick-start installs.
+	EventsModeEmbedded = "embedded"
+	// EventsModeOff runs no event bus and publishes no events.
+	EventsModeOff = "off"
+)
+
+// EventsConfig configures the platform event bus and the delivery of events
+// to event destinations.
+type EventsConfig struct {
+	// Mode is nats, embedded or off. When unset it is nats if NATSURL is set,
+	// off otherwise.
+	Mode string
+	// NATSURL is the NATS server for nats mode, e.g. nats://nats:4222.
+	NATSURL string
+	// NATSToken authenticates to the NATS server, when it requires a token.
+	// The bus carries every org's events, so a shared server must not be
+	// open to whoever can reach it.
+	NATSToken string `json:"-"`
+	// AllowPrivateDestinations lets destination URLs resolve to private,
+	// loopback or link-local addresses, and allows plain http. Off by default
+	// so an admin cannot point the service at internal infrastructure; enable
+	// only for local development.
+	AllowPrivateDestinations bool
+	// DeliveryMaxAttempts is how many times a delivery is tried before it is
+	// marked failed.
+	DeliveryMaxAttempts int
+	// DeliveryRetentionDays is how long the delivery log is kept.
+	DeliveryRetentionDays int
 }
 
 // AuditConfig controls the audit trail.
@@ -277,10 +353,21 @@ type SecretManagerConfig struct {
 	// RefreshInterval is how often SecretReference CRs should refresh from the
 	// secret store (default: "1h")
 	RefreshInterval string
-	// AgentIdentityRefreshInterval is the AgentID SecretReference's refresh
-	// cadence (default: "15s"), kept separate from RefreshInterval above so
-	// AgentID's fast rotation-to-pod requirement never depends on it.
+	// AgentIdentityRefreshInterval is the fallback wait after rotating an
+	// Agent ID credential when force-sync could not be confirmed (default: "10m").
+	// It must cover the workload's secret-env ExternalSecret refresh interval.
 	AgentIdentityRefreshInterval string
+	// AgentIdentityForceSyncWait is how long to wait after forcing the workload's
+	// secret-env ExternalSecret to re-sync on rotation, before rolling the pod
+	// (default: "20s"). Used instead of AgentIdentityRefreshInterval whenever
+	// the force-sync write succeeds.
+	AgentIdentityForceSyncWait string
+	// AgentIdentityForceSyncApplyTimeout bounds how long to wait, before the
+	// AgentIdentityForceSyncWait above, for the new force-sync revision to show
+	// up on the live ExternalSecret (default: "2m"). On timeout a warning is
+	// logged and the pod is rolled after AgentIdentityRefreshInterval, not the
+	// short force-sync wait, because the force-sync was not confirmed.
+	AgentIdentityForceSyncApplyTimeout string
 }
 
 // OpenBaoConfig holds OpenBao KV store configuration.
@@ -529,6 +616,46 @@ type InternalServerConfig struct {
 	WriteTimeoutSeconds int
 	IdleTimeoutSeconds  int
 	MaxHeaderBytes      int
+}
+
+// BuildClientConfig controls the organization-scoped build token.
+//
+// When Enabled, every source build of an agent whose build workflow is listed in
+// Workflows carries an access token for its organization. This service obtains it
+// from the identity provider's organization token endpoint
+// (<IDP_TOKEN_URL without /oauth2/token>/ou/<ouId>/oauth2/token) with its own
+// client (IDP_CLIENT_ID / IDP_CLIENT_SECRET), stores it in the secret store and
+// passes the run only the name of the SecretReference holding it, as the run's
+// ampBuild parameter. The build's workload step hands the generated Workload,
+// with that token, to this service's build publisher endpoint, which performs the
+// OpenChoreo writes for that organization only. The build never holds a client
+// secret and needs no OpenChoreo credential of its own.
+//
+// Off by default: the build workflows and their workload step must declare the
+// ampBuild parameter before it is enabled. A namespaced Workflow that does not
+// declare it is not given the parameter, and its build keeps its previous path. A
+// ClusterWorkflow is not read: listing it in Workflows is taken to mean it
+// declares ampBuild (and ampBuild.secretStore when SecretStore is set), so list
+// only ClusterWorkflows that are installed that way. The identity provider must
+// support the organization token endpoint, and KEY_MANAGER_AUDIENCE must admit
+// IDP_CLIENT_ID, the audience of the tokens it issues.
+type BuildClientConfig struct {
+	// Enabled turns on build tokens and the build publisher endpoint
+	// (AMP_BUILD_CLIENT_ENABLED). Requires IDP_TOKEN_URL (ending in /oauth2/token),
+	// IDP_CLIENT_ID and IDP_CLIENT_SECRET.
+	Enabled bool
+	// Workflows names the build workflows (Workflow or ClusterWorkflow names)
+	// whose runs receive a build token (AMP_BUILD_CLIENT_WORKFLOWS). Only list
+	// workflows that wire parameters.ampBuild through to their workload step. A
+	// listed ClusterWorkflow is given the token without its schema being read.
+	Workflows []string
+	// SecretStore names the ClusterSecretStore a build run reads its token through
+	// (AMP_BUILD_CLIENT_SECRET_STORE), passed as parameters.ampBuild.secretStore.
+	// Empty passes none, and the workflow reads the token through its workflow
+	// plane's store. Set it where the token is stored somewhere that store cannot
+	// read; a run then gets the token only if its workflow declares
+	// ampBuild.secretStore.
+	SecretStore string
 }
 
 // ThunderConfig holds Thunder admin API configuration for provisioning OAuth apps

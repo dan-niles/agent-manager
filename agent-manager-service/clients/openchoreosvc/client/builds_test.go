@@ -31,6 +31,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/wso2/agent-manager/agent-manager-service/clients/openchoreosvc/gen"
+	"github.com/wso2/agent-manager/agent-manager-service/utils"
 )
 
 // A component created before routePath existed: spec.parameters carries the
@@ -298,4 +299,259 @@ func TestListBuilds_DoesNotWarnTruncatedOnCleanStop(t *testing.T) {
 	assert.Len(t, builds, 1, "the page that did parse must still be returned")
 	assert.NotContains(t, logs.String(), "truncated",
 		"a clean end of list must not be reported as a truncated build list")
+}
+
+func TestWithRunEnvVars_AddsToRunWithoutTouchingComponent(t *testing.T) {
+	userEnv := map[string]interface{}{"name": "LOG_LEVEL", "value": "debug"}
+	staleID := map[string]interface{}{"name": EnvVarAgentIDClientID, "value": "old"}
+	params := map[string]interface{}{
+		workflowParamEnvironmentVariables: []interface{}{userEnv, staleID},
+		"repository":                      map[string]interface{}{"url": "https://example.com/repo"},
+	}
+
+	got := withRunEnvVars(params, []EnvVar{
+		{Key: EnvVarAgentIDClientID, Value: "new"},
+		{Key: EnvVarAgentIDClientSecret, ValueFrom: &EnvVarValueFrom{SecretKeyRef: &SecretKeyRef{Name: "agent-secret", Key: "client-secret"}}},
+	})
+
+	assert.Equal(t, []interface{}{
+		userEnv,
+		map[string]any{"name": EnvVarAgentIDClientID, "value": "new"},
+		map[string]any{"name": EnvVarAgentIDClientSecret, "valueFrom": map[string]any{
+			"secretKeyRef": map[string]any{"name": "agent-secret", "key": "client-secret"},
+		}},
+	}, got[workflowParamEnvironmentVariables])
+	assert.Equal(t, params["repository"], got["repository"])
+	// The component's own parameters keep only what the user configured.
+	assert.Equal(t, []interface{}{userEnv, staleID}, params[workflowParamEnvironmentVariables])
+}
+
+func TestWithRunEnvVars_NoVarsReturnsParamsUnchanged(t *testing.T) {
+	params := map[string]interface{}{workflowParamEnvironmentVariables: []interface{}{}}
+	assert.Equal(t, params, withRunEnvVars(params, nil))
+}
+
+// GetBuild looks workflow runs up by name across the namespace, so it must
+// reject a run labelled for another agent or project as not found rather than
+// presenting it as a build of the requested agent.
+func TestGetBuild_RejectsBuildOfAnotherAgent(t *testing.T) {
+	cases := map[string]struct {
+		labels  string
+		wantErr bool
+	}{
+		"own build":           {labels: `{"openchoreo.dev/project":"proj","openchoreo.dev/component":"agent"}`},
+		"other agent":         {labels: `{"openchoreo.dev/project":"proj","openchoreo.dev/component":"other"}`, wantErr: true},
+		"other project":       {labels: `{"openchoreo.dev/project":"other","openchoreo.dev/component":"agent"}`, wantErr: true},
+		"no ownership labels": {labels: `{}`, wantErr: true},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			client := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusOK)
+				_, err := fmt.Fprintf(w, `{"metadata":{"name":"agent-1000","labels":%s}}`, tc.labels)
+				require.NoError(t, err)
+			}))
+
+			_, err := client.GetBuild(context.Background(), "acme", "proj", "agent", "agent-1000")
+			if tc.wantErr {
+				assert.ErrorIs(t, err, utils.ErrNotFound)
+				return
+			}
+			assert.NoError(t, err)
+		})
+	}
+}
+
+// GetBuildByName serves callers that know only the build name, so it reports
+// the owning agent from the run's labels instead of checking them.
+func TestGetBuildByName_ReportsOwnerFromLabels(t *testing.T) {
+	client := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, err := fmt.Fprint(w, `{"metadata":{"name":"agent-1000","labels":{"openchoreo.dev/project":"proj","openchoreo.dev/component":"agent"}}}`)
+		require.NoError(t, err)
+	}))
+
+	build, err := client.GetBuildByName(context.Background(), "acme", "agent-1000")
+	require.NoError(t, err)
+	assert.Equal(t, "proj", build.ProjectName)
+	assert.Equal(t, "agent", build.AgentName)
+}
+
+// A missing build is utils.ErrNotFound whether or not OpenChoreo's 404 carries an
+// error body. Without a body it used to surface as "unexpected error: status 404",
+// which callers could not tell apart from a real failure.
+func TestGetBuild_MissingRunIsNotFound(t *testing.T) {
+	cases := map[string]string{
+		"404 without a body": "",
+		"404 with a body":    `{"error":"workflow run not found","code":"NOT_FOUND"}`,
+	}
+	for name, body := range cases {
+		t.Run(name, func(t *testing.T) {
+			// Raw headers: a bodyless 404 (from a proxy, say) is not labelled JSON.
+			client := newTestClientRawHeaders(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if body != "" {
+					w.Header().Set("Content-Type", "application/json")
+				}
+				w.WriteHeader(http.StatusNotFound)
+				_, _ = fmt.Fprint(w, body)
+			}))
+
+			_, err := client.GetBuild(context.Background(), "acme", "proj", "agent", "agent-1000")
+			require.ErrorIs(t, err, utils.ErrNotFound)
+			_, err = client.GetBuildByName(context.Background(), "acme", "agent-1000")
+			require.ErrorIs(t, err, utils.ErrNotFound)
+			_, err = client.GetBuildRun(context.Background(), "acme", "agent-1000")
+			require.ErrorIs(t, err, utils.ErrNotFound)
+		})
+	}
+}
+
+// An agent whose build settings already hold health checks: readiness HTTP /health.
+const componentWithHealthChecksJSON = `{
+  "metadata": {"name": "support-bot"},
+  "spec": {
+    "componentType": {"name": "proxy/agent-api"},
+    "owner": {"projectName": "proj"},
+    "workflow": {"parameters": {
+      "endpoints": [],
+      "healthChecks": {"readiness": {"type": "HTTP", "path": "/health"}}
+    }}
+  }
+}`
+
+// savedBuildParameters runs UpdateComponentBuildParameters against a fake OpenChoreo
+// holding componentWithHealthChecksJSON and returns the build settings it writes back.
+func savedBuildParameters(t *testing.T, req UpdateComponentBuildParametersRequest) map[string]any {
+	t.Helper()
+	var putWorkflowParameters map[string]any
+	client := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			var sent struct {
+				Spec struct {
+					Workflow struct {
+						Parameters map[string]any `json:"parameters"`
+					} `json:"workflow"`
+				} `json:"spec"`
+			}
+			require.NoError(t, json.NewDecoder(r.Body).Decode(&sent))
+			putWorkflowParameters = sent.Spec.Workflow.Parameters
+		}
+		w.WriteHeader(http.StatusOK)
+		_, err := w.Write([]byte(componentWithHealthChecksJSON))
+		require.NoError(t, err)
+	}))
+	req.AgentType = AgentTypeConfig{Type: "agent-api", SubType: "chat-api"}
+	require.NoError(t, client.UpdateComponentBuildParameters(context.Background(), "acme", "proj", "support-bot", req))
+	require.NotNil(t, putWorkflowParameters, "expected the update to PUT the component back")
+	return putWorkflowParameters
+}
+
+// Configure Build without health checks must keep the saved ones, so a caller that
+// doesn't know about health checks can't wipe them.
+func TestUpdateComponentBuildParameters_KeepsHealthChecksWhenNotSent(t *testing.T) {
+	saved := savedBuildParameters(t, UpdateComponentBuildParametersRequest{})
+	assert.Equal(t, map[string]any{"readiness": map[string]any{"type": "HTTP", "path": "/health"}}, saved["healthChecks"])
+}
+
+// Sent health checks replace the saved ones entirely: readiness is not merged in.
+func TestUpdateComponentBuildParameters_ReplacesHealthChecksWhenSent(t *testing.T) {
+	tcp := "TCP"
+	saved := savedBuildParameters(t, UpdateComponentBuildParametersRequest{
+		HealthChecks: &HealthChecksConfig{Liveness: &HealthCheckConfig{Type: &tcp}},
+	})
+	assert.Equal(t, map[string]any{"liveness": map[string]any{"type": "TCP"}}, saved["healthChecks"])
+}
+
+// Empty health checks remove the saved ones, so the next build uses the defaults.
+func TestUpdateComponentBuildParameters_EmptyHealthChecksRemovesSavedOnes(t *testing.T) {
+	saved := savedBuildParameters(t, UpdateComponentBuildParametersRequest{HealthChecks: &HealthChecksConfig{}})
+	assert.NotContains(t, saved, "healthChecks")
+}
+
+// Creating an agent saves the health checks next to the endpoints, so the first build records them.
+func TestBuildWorkflowParameters_SavesHealthChecksOnCreate(t *testing.T) {
+	disabled := false
+	params, err := buildWorkflowParameters(CreateComponentRequest{
+		Name:           "support-bot",
+		AgentType:      AgentTypeConfig{Type: "agent-api", SubType: "chat-api"},
+		InputInterface: &InputInterfaceConfig{Type: "HTTP"},
+		HealthChecks:   &HealthChecksConfig{Startup: &HealthCheckConfig{Enabled: &disabled}},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, map[string]any{"startup": map[string]any{"enabled": false}}, params["healthChecks"])
+
+	params, err = buildWorkflowParameters(CreateComponentRequest{
+		Name:           "support-bot",
+		AgentType:      AgentTypeConfig{Type: "agent-api", SubType: "chat-api"},
+		InputInterface: &InputInterfaceConfig{Type: "HTTP"},
+	})
+	require.NoError(t, err)
+	assert.NotContains(t, params, "healthChecks", "nothing sent, so nothing saved")
+}
+
+// Reading the agent returns the saved health checks, so Configure Build can show them.
+func TestConvertComponentFromTyped_ReturnsSavedHealthChecks(t *testing.T) {
+	var component gen.Component
+	require.NoError(t, json.Unmarshal([]byte(componentWithHealthChecksJSON), &component))
+
+	agent, err := convertComponentFromTyped(&component)
+
+	require.NoError(t, err)
+	require.NotNil(t, agent.HealthChecks)
+	require.NotNil(t, agent.HealthChecks.Readiness)
+	assert.Equal(t, "HTTP", *agent.HealthChecks.Readiness.Type)
+	assert.Equal(t, "/health", *agent.HealthChecks.Readiness.Path)
+	assert.Nil(t, agent.HealthChecks.Startup)
+}
+
+// A saved value that can't be read is left out of the agent rather than failing, because
+// callers drop an agent that fails to convert from the agent list.
+func TestConvertComponentFromTyped_UnreadableHealthChecksAreLeftOut(t *testing.T) {
+	var component gen.Component
+	require.NoError(t, json.Unmarshal([]byte(componentWithHealthChecksJSON), &component))
+	(*component.Spec.Workflow.Parameters)["healthChecks"] = "not an object"
+
+	agent, err := convertComponentFromTyped(&component)
+
+	require.NoError(t, err)
+	assert.Nil(t, agent.HealthChecks)
+}
+
+// Every field is saved under the name the agent-api ComponentType reads
+// (environmentConfigs.healthChecks.<check>.<field>); a misspelt name would be
+// saved without error and silently ignored when the pod is rendered.
+func TestSetHealthChecksWorkflowParameter_SavesEveryFieldUnderTheTemplateName(t *testing.T) {
+	enabled, checkType, path := true, "HTTP", "/health"
+	port, initialDelay, period, timeout, failures := int32(9000), int32(0), int32(5), int32(2), int32(6)
+	params := map[string]any{}
+
+	setHealthChecksWorkflowParameter(params, &HealthChecksConfig{Readiness: &HealthCheckConfig{
+		Enabled: &enabled, Type: &checkType, Path: &path, Port: &port,
+		InitialDelaySeconds: &initialDelay, PeriodSeconds: &period, TimeoutSeconds: &timeout, FailureThreshold: &failures,
+	}})
+
+	assert.Equal(t, map[string]any{"readiness": map[string]any{
+		"enabled": true, "type": "HTTP", "path": "/health", "port": int32(9000),
+		"initialDelaySeconds": int32(0), "periodSeconds": int32(5), "timeoutSeconds": int32(2), "failureThreshold": int32(6),
+	}}, params["healthChecks"])
+}
+
+// A build read from OpenChoreo carries the health checks its WorkflowRun recorded, which
+// deploy uses to give an environment that build's own checks.
+func TestToWorkflowRunBuild_ReturnsTheBuildsHealthChecks(t *testing.T) {
+	var run gen.WorkflowRun
+	require.NoError(t, json.Unmarshal([]byte(`{
+	  "metadata": {"name": "support-bot-1"},
+	  "spec": {"workflow": {"name": "amp-docker", "parameters": {
+	    "healthChecks": {"readiness": {"type": "HTTP", "path": "/health", "periodSeconds": 3}}
+	  }}}
+	}`), &run))
+
+	build, err := toWorkflowRunBuild(&run, "support-bot", "proj")
+
+	require.NoError(t, err)
+	require.NotNil(t, build.HealthChecks)
+	require.NotNil(t, build.HealthChecks.Readiness)
+	assert.Equal(t, "/health", *build.HealthChecks.Readiness.Path)
+	assert.Equal(t, int32(3), *build.HealthChecks.Readiness.PeriodSeconds)
 }

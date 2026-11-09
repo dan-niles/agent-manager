@@ -16,6 +16,7 @@
  * under the License.
  */
 
+import { backendFetch, fetchWithBackendToken } from '@agent-management-platform/auth';
 import {
     formatBytes,
     getMaxRequestBodyBytes,
@@ -37,6 +38,34 @@ export function encodeRequired(value: string | undefined, label: string): string
 export const OBS_SERVICE_BASE = '/api';
 export const POLL_INTERVAL = 5000;
 export const SLOW_POLL_INTERVAL = 15000;
+
+/** Re-poll while pending; stop on any other status or no data. */
+export function pendingRefetchInterval(
+    data: { status?: string } | null | undefined,
+): number | false {
+    return data?.status === 'pending' ? POLL_INTERVAL : false;
+}
+
+/** Re-poll while a gateway deploy or undeploy is in flight; stop once settled, or with no data. */
+export function transitionRefetchInterval(
+    data: { status?: string } | null | undefined,
+): number | false {
+    const inFlight = data?.status === 'DEPLOYING' || data?.status === 'UNDEPLOYING';
+    return inFlight ? POLL_INTERVAL : false;
+}
+
+export const isNotFoundError = (error: unknown): boolean =>
+    (error as { status?: number } | null)?.status === 404;
+
+/** Resolves a 404 to null, for resources whose absence is a valid state. */
+export async function nullIfNotFound<T>(request: Promise<T>): Promise<T | null> {
+    try {
+        return await request;
+    } catch (error) {
+        if (isNotFoundError(error)) return null;
+        throw error;
+    }
+}
 
 const DEFAULT_TIMEOUT = 1000;
 
@@ -79,8 +108,13 @@ async function throwIfHttpWriteNotOk(response: Response): Promise<void> {
     throw err;
 }
 
-async function finalizeHttpWriteResponse(response: Response): Promise<Response> {
+async function finalizeHttpWriteResponse(
+    response: Response,
+    signal?: AbortSignal,
+): Promise<Response> {
     await sleep(DEFAULT_TIMEOUT);
+    // An abort during the wait still reads as an abort, not as the response's error.
+    signal?.throwIfAborted();
     if (!response.ok) {
         await throwIfHttpWriteNotOk(response);
     }
@@ -137,7 +171,7 @@ export async function httpGET(
     const controller = timeoutMs ? new AbortController() : undefined;
     const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : undefined;
     try {
-        const response = await fetch(`${baseUrl}${context}?${new URLSearchParams(searchParams).toString()}`, {
+        const response = await backendFetch(`${baseUrl}${context}?${new URLSearchParams(searchParams).toString()}`, {
             method: 'GET',
             headers:  token ? {
                   'Content-Type': 'application/json',
@@ -190,7 +224,7 @@ export async function httpGETObserver(
         );
     }
     const baseUrl = obsUrl;
-    const response = await fetch(`${baseUrl}${context}?${new URLSearchParams(searchParams).toString()}`, {
+    const response = await fetchWithBackendToken(`${baseUrl}${context}?${new URLSearchParams(searchParams).toString()}`, {
         method: 'GET',
         headers: token ? {
             'Content-Type': 'application/json',
@@ -211,10 +245,15 @@ export async function httpGETObserver(
 export async function httpPOST(
     context: string, 
     body: object, 
-    params: {searchParams?: Record<string, string>, token?: string, options?: HttpOptions}) {
-    const {searchParams, token} = params;
+    params: {
+        searchParams?: Record<string, string>,
+        token?: string,
+        options?: HttpOptions,
+        signal?: AbortSignal,
+    }) {
+    const {searchParams, token, signal} = params;
     const baseUrl = globalConfig.apiBaseUrl;
-    const response = await fetch(`${baseUrl}${context}?${new URLSearchParams(searchParams).toString()}`, {
+    const response = await backendFetch(`${baseUrl}${context}?${new URLSearchParams(searchParams).toString()}`, {
         method: 'POST',
         headers: token ? {
             'Content-Type': 'application/json',
@@ -222,9 +261,10 @@ export async function httpPOST(
         } : {
             'Content-Type': 'application/json'
         },
-        body: serializeRequestBody(body)
+        body: serializeRequestBody(body),
+        signal
     });
-    return finalizeHttpWriteResponse(response);
+    return finalizeHttpWriteResponse(response, signal);
 }
 
 export async function httpPUT(
@@ -233,7 +273,7 @@ export async function httpPUT(
     params: {searchParams?: Record<string, string>, token?: string, options?: HttpOptions}) {
     const {searchParams, token} = params;
     const baseUrl = globalConfig.apiBaseUrl;
-    const response = await fetch(`${baseUrl}${context}?${new URLSearchParams(searchParams).toString()}`, {
+    const response = await backendFetch(`${baseUrl}${context}?${new URLSearchParams(searchParams).toString()}`, {
         method: 'PUT',
         headers: token ? {
             'Content-Type': 'application/json',
@@ -251,7 +291,7 @@ export async function httpDELETE(
     params: {searchParams?: Record<string, string>, token?: string, options?: HttpOptions}) {
     const {searchParams, token} = params;
     const baseUrl = globalConfig.apiBaseUrl;
-    const response = await fetch(`${baseUrl}${context}?${new URLSearchParams(searchParams).toString()}`, {
+    const response = await backendFetch(`${baseUrl}${context}?${new URLSearchParams(searchParams).toString()}`, {
         method: 'DELETE',
         headers: token ? {
             'Content-Type': 'application/json',
@@ -269,7 +309,7 @@ export async function httpPATCH(
     params: {searchParams?: Record<string, string>, token?: string, options?: HttpOptions}) {
     const {searchParams, token} = params;
     const baseUrl = globalConfig.apiBaseUrl;
-    const response = await fetch(`${baseUrl}${context}?${new URLSearchParams(searchParams).toString()}`, {
+    const response = await backendFetch(`${baseUrl}${context}?${new URLSearchParams(searchParams).toString()}`, {
         method: 'PATCH',
         headers: token ? {
             'Content-Type': 'application/json',

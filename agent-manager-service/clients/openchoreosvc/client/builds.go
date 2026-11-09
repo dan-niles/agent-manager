@@ -19,6 +19,7 @@ package client
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -34,13 +35,51 @@ import (
 	"github.com/wso2/agent-manager/agent-manager-service/middleware/logger"
 	"github.com/wso2/agent-manager/agent-manager-service/models"
 	"github.com/wso2/agent-manager/agent-manager-service/utils"
+	"github.com/wso2/agent-manager/agent-manager-service/workloadpolicy"
 )
+
+// withRunEnvVars returns params with envVars appended to its environmentVariables, replacing
+// any entry with the same name. The component's map is copied rather than modified, so the
+// extra vars reach only this WorkflowRun.
+func withRunEnvVars(params map[string]interface{}, envVars []EnvVar) map[string]interface{} {
+	if len(envVars) == 0 {
+		return params
+	}
+	runKeys := make(map[string]bool, len(envVars))
+	for _, ev := range envVars {
+		runKeys[ev.Key] = true
+	}
+	merged := make([]interface{}, 0)
+	if existing, ok := params[workflowParamEnvironmentVariables].([]interface{}); ok {
+		for _, item := range existing {
+			if m, ok := item.(map[string]interface{}); ok {
+				if name, _ := m["name"].(string); runKeys[name] {
+					continue
+				}
+			}
+			merged = append(merged, item)
+		}
+	}
+	for _, env := range buildEnvironmentVariables(CreateComponentRequest{Configurations: &Configurations{Env: envVars}}) {
+		merged = append(merged, env)
+	}
+
+	out := make(map[string]interface{}, len(params)+1)
+	for k, v := range params {
+		out[k] = v
+	}
+	out[workflowParamEnvironmentVariables] = merged
+	return out
+}
 
 // workflowRunWorkloadAnnotationKey is set by AMP's generate-workload workflow on successful runs
 // to the JSON workload object (including spec.container.image).
 const workflowRunWorkloadAnnotationKey = "openchoreo.dev/workload"
 
-func (c *openChoreoClient) TriggerBuild(ctx context.Context, ouID, projectName, componentName, commitID, workflowRunName string) (*models.BuildResponse, error) {
+func (c *openChoreoClient) TriggerBuild(ctx context.Context, ouID, projectName, componentName, commitID, workflowRunName string, runEnvVars []EnvVar, buildClient BuildClientSource) (*models.BuildResponse, error) {
+	if err := workloadpolicy.Check(ctx, ouID); err != nil {
+		return nil, err
+	}
 	namespaceName := c.NamespaceFor(ouID)
 	// Get the component to find its workflow configuration
 	compResp, err := c.ocClient.GetComponentWithResponse(ctx, namespaceName, componentName)
@@ -89,6 +128,39 @@ func (c *openChoreoClient) TriggerBuild(ctx context.Context, ouID, projectName, 
 			}
 		}
 	}
+	params = withRunEnvVars(params, runEnvVars)
+	// The build token is issued only for a workflow that takes it, so an
+	// identity provider or secret store outage cannot fail a build that would
+	// never carry the token. Once the workflow does take it, a failure to issue
+	// it fails the build rather than starting one that cannot publish its
+	// Workload. The cause is reported as text, not wrapped: its sentinel (a
+	// secret store's not-found, say) is not this build's 404. A namespaced
+	// Workflow that cannot be read fails the build here too; a ClusterWorkflow is
+	// not read (see attachBuildClient).
+	attach, err := c.attachBuildClient(ctx, namespaceName, workflowKind, workflowName, buildClient != nil)
+	if err != nil {
+		return nil, err
+	}
+	if attach {
+		buildToken, err := buildClient(ctx)
+		if err != nil {
+			// A temporary outage (identity provider or secret store) is answered
+			// as retryable, with a message that names no upstream detail; the
+			// cause is logged here instead.
+			if errors.Is(err, utils.ErrServiceUnavailable) {
+				slog.ErrorContext(ctx, "Could not issue the build token", "workflow", workflowName, "error", err)
+				return nil, fmt.Errorf("%w: could not prepare the build's credentials, try again in a moment", utils.ErrServiceUnavailable)
+			}
+			return nil, fmt.Errorf("failed to issue the build token: %v", err) //nolint:errorlint // deliberately not wrapped, see above
+		}
+		if buildToken == nil {
+			return nil, fmt.Errorf("failed to issue the build token: none was returned")
+		}
+		if buildToken.SecretStore == "" {
+			buildToken.SecretStore = config.GetConfig().BuildClient.SecretStore
+		}
+		params = withBuildClient(params, buildToken)
+	}
 
 	// Preserve the open-source behavior when no deployment-specific name is supplied.
 	if workflowRunName == "" {
@@ -133,10 +205,41 @@ func (c *openChoreoClient) TriggerBuild(ctx context.Context, ouID, projectName, 
 }
 
 func (c *openChoreoClient) GetBuild(ctx context.Context, ouID, projectName, componentName, buildName string) (*models.BuildDetailsResponse, error) {
-	namespaceName := c.NamespaceFor(ouID)
-	resp, err := c.ocClient.GetWorkflowRunWithResponse(ctx, namespaceName, buildName)
+	run, err := c.getWorkflowRun(ctx, ouID, buildName)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get build: %w", err)
+		return nil, err
+	}
+	// Workflow runs are looked up by name across the whole namespace, so a
+	// build of another agent must not pass as one of this agent's.
+	labels := run.Metadata.Labels
+	if getLabel(labels, string(LabelKeyComponentName)) != componentName || getLabel(labels, string(LabelKeyProjectName)) != projectName {
+		return nil, fmt.Errorf("%w: build %q does not belong to agent %q", utils.ErrNotFound, buildName, componentName)
+	}
+
+	return toBuildDetailsResponse(run, componentName, projectName)
+}
+
+// GetBuildByName looks a build up by name alone. Use it only when the caller
+// does not know which agent ran the build, as with a kind version, which
+// records just the build name.
+func (c *openChoreoClient) GetBuildByName(ctx context.Context, ouID, buildName string) (*models.BuildDetailsResponse, error) {
+	run, err := c.getWorkflowRun(ctx, ouID, buildName)
+	if err != nil {
+		return nil, err
+	}
+	labels := run.Metadata.Labels
+	return toBuildDetailsResponse(run, getLabel(labels, string(LabelKeyComponentName)), getLabel(labels, string(LabelKeyProjectName)))
+}
+
+func (c *openChoreoClient) getWorkflowRun(ctx context.Context, ouID, buildName string) (*gen.WorkflowRun, error) {
+	resp, err := c.ocClient.GetWorkflowRunWithResponse(ctx, c.NamespaceFor(ouID), buildName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get workflow run %q: %w", buildName, err)
+	}
+	// A 404 is a missing run whether or not OpenChoreo sent an error body;
+	// handleErrorResponse recognizes it only when it did.
+	if resp.StatusCode() == http.StatusNotFound {
+		return nil, fmt.Errorf("%w: workflow run %q", utils.ErrNotFound, buildName)
 	}
 
 	if resp.StatusCode() != http.StatusOK {
@@ -149,10 +252,9 @@ func (c *openChoreoClient) GetBuild(ctx context.Context, ouID, projectName, comp
 	}
 
 	if resp.JSON200 == nil {
-		return nil, fmt.Errorf("empty response from get build")
+		return nil, fmt.Errorf("empty response from get workflow run %q", buildName)
 	}
-
-	return toBuildDetailsResponse(resp.JSON200, componentName, projectName)
+	return resp.JSON200, nil
 }
 
 func (c *openChoreoClient) ListBuilds(ctx context.Context, ouID, projectName, componentName string) ([]*models.BuildResponse, error) {
@@ -403,6 +505,9 @@ func buildUpdatedWorkflowParameters(componentName string, existingParams map[str
 		existingParams["endpoints"] = endpoints
 	}
 
+	// Replace the saved health checks if sent; keep them if not
+	setHealthChecksWorkflowParameter(existingParams, req.HealthChecks)
+
 	return existingParams, nil
 }
 
@@ -516,6 +621,13 @@ func toWorkflowRunBuild(run *gen.WorkflowRun, componentName, projectName string)
 				build.BuildParameters.DockerfilePath = filePath
 			}
 		}
+		// The health checks this build recorded when it started. One that can't be read is left
+		// out, as when reading the agent, so the build is still listed.
+		healthChecks, err := healthChecksFromWorkflowParameters(params)
+		if err != nil {
+			slog.Warn("failed to read a build's health checks", "build", run.Metadata.Name, "error", err)
+		}
+		build.HealthChecks = healthChecks
 	}
 
 	return build, nil

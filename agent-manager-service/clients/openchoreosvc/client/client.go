@@ -78,6 +78,9 @@ type OpenChoreoClient interface {
 	// Component Operations
 	CreateComponent(ctx context.Context, ouID, projectName string, req CreateComponentRequest) error
 	GetComponent(ctx context.Context, ouID, projectName, componentName string) (*models.AgentResponse, error)
+	// GetComponentReconcileBlock reports why OpenChoreo cannot reconcile the component, or nil when
+	// nothing is blocking it. Used to refuse writes the Component controller would silently discard.
+	GetComponentReconcileBlock(ctx context.Context, ouID, componentName string) (*ComponentReconcileBlock, error)
 	UpdateComponentBasicInfo(ctx context.Context, ouID, projectName, componentName string, req UpdateComponentBasicInfoRequest) error
 	GetEnvResourceConfigs(ctx context.Context, ouID, projectName, componentName, environment string) (*ComponentResourceConfigsResponse, error)
 	UpdateEnvResourceConfigs(ctx context.Context, ouID, projectName, componentName, environment string, req UpdateComponentResourceConfigsRequest) error
@@ -96,12 +99,17 @@ type OpenChoreoClient interface {
 	DetachTrait(ctx context.Context, ouID, projectName, componentName string, traitType TraitType) error
 	HasTrait(ctx context.Context, ouID, projectName, componentName string, traitType TraitType) (bool, error)
 	UpdateComponentDeploymentConfig(ctx context.Context, ouID, projectName, componentName string, req ComponentDeploymentConfigRequest) error
+	GetComponentBaseEnvVars(ctx context.Context, ouID, componentName string) ([]EnvVar, error)
 	UpdateComponentEnvVars(ctx context.Context, ouID, projectName, componentName string, envVars []EnvVar) error
 	ReplaceComponentEnvVars(ctx context.Context, ouID, projectName, componentName string, envVars []EnvVar) error
 	ReplaceComponentFileMounts(ctx context.Context, ouID, projectName, componentName string, files []FileVar) error
 	UpdateReleaseBindingEnvVars(ctx context.Context, ouID, projectName, componentName, envName string, envVars []EnvVar) error
 	RemoveComponentEnvironmentVariables(ctx context.Context, ouID, projectName, componentName string, envVarKeys []string) error
 	RemoveReleaseBindingEnvVars(ctx context.Context, ouID, projectName, componentName, envName string, envVarKeys []string) error
+	SetReleaseBindingSecretSyncRevision(ctx context.Context, ouID, componentName, envName, revision string) error
+	ComponentTypeDeclaresEnvironmentConfig(ctx context.Context, ouID, componentName, field string) (bool, error)
+	IsSecretSyncRevisionApplied(ctx context.Context, ouID, componentName, envName, revision string) (bool, error)
+	SyncEditedWorkloadSecrets(ctx context.Context, ouID, componentName, envName string, editedKeys []string) error
 	ReplaceReleaseBindingEnvVars(ctx context.Context, ouID, projectName, componentName, envName string, keysToRemove []string, envVarsToAdd []EnvVar) error
 	RemoveWorkloadEnvVars(ctx context.Context, ouID, componentName string, envVarKeys []string) error
 	GetComponentEndpoints(ctx context.Context, ouID, projectName, componentName, environment string) (map[string]models.EndpointsResponse, error)
@@ -111,17 +119,49 @@ type OpenChoreoClient interface {
 	// reports it. Empty string with a nil error means the binding has not
 	// published one yet.
 	GetReleaseBindingServiceURL(ctx context.Context, ouID, componentName, environment string) (string, error)
+	// GetReleaseBindingEndpointServiceURL returns the in-cluster service URL of one named endpoint
+	// of a component's release binding, scoped to the project; releaseBindingName picks the binding when
+	// the component has more than one in the environment. "" with a nil error means the binding has not
+	// reconciled yet; ErrReleaseBindingNotFound, ErrAmbiguousReleaseBinding, ErrReleaseBindingMismatch or
+	// ErrEndpointNotFound otherwise.
+	GetReleaseBindingEndpointServiceURL(ctx context.Context, ouID, projectName, componentName, endpointName, environment, releaseBindingName string) (string, error)
 	// GetReleaseBindingRollout reports the binding's release and whether its rollout has finished.
 	GetReleaseBindingRollout(ctx context.Context, ouID, componentName, environment string) (ReleaseBindingRollout, error)
+	// GetReleaseBindingTraits names the traits on the release bound in the environment; bound is false when the
+	// environment has no binding.
+	GetReleaseBindingTraits(ctx context.Context, ouID, componentName, environment string) (traits []TraitType, bound bool, err error)
+	// GetReleaseAgentAPIKeyTrait reads how the env-injection trait frozen into the release bound in the
+	// environment delivers the agent API key.
+	GetReleaseAgentAPIKeyTrait(ctx context.Context, ouID, componentName, environment string) (ReleaseAgentAPIKeyTrait, error)
+	// GetReleaseBindingAgentAPIKeySecretRef returns the env-injection trait's per-environment
+	// agentApiKeySecretRef on the release binding in the environment, or "" when there is none.
+	GetReleaseBindingAgentAPIKeySecretRef(ctx context.Context, ouID, componentName, environment string) (string, error)
 	GetComponentConfigurations(ctx context.Context, ouID, projectName, componentName, environment string) ([]models.EnvVars, error)
 	GetComponentFileMounts(ctx context.Context, ouID, projectName, componentName, environment string) ([]models.FileMountEntry, error)
 
 	// Build Operations
 	// workflowRunName may be supplied by the service when deployment-specific work must
 	// happen before the run is created. An empty value preserves the default behavior and
-	// lets the client generate the name.
-	TriggerBuild(ctx context.Context, ouID, projectName, componentName, commitID, workflowRunName string) (*models.BuildResponse, error)
+	// lets the client generate the name. runEnvVars are added to this run's environment
+	// variables only, never to the component; the build applies them only if it creates the
+	// first environment's ReleaseBinding, so they don't change a binding that already exists.
+	// buildClient, when non-nil, issues the run's organization-scoped build token; it is
+	// called, and the token attached to this run as the ampBuild parameter, only when the
+	// component's build workflow is listed in config.BuildClient.Workflows and, for a
+	// namespaced Workflow, declares ampBuild; a listed ClusterWorkflow is not read (see
+	// attachBuildClient and withBuildClient).
+	TriggerBuild(ctx context.Context, ouID, projectName, componentName, commitID, workflowRunName string, runEnvVars []EnvVar, buildClient BuildClientSource) (*models.BuildResponse, error)
+	// GetBuildRun returns what the build publisher endpoint needs to know about a
+	// WorkflowRun: its owner labels, the workflow it runs and its status. A run that
+	// does not exist in the organization's namespace is utils.ErrNotFound.
+	GetBuildRun(ctx context.Context, ouID, runName string) (*BuildRunInfo, error)
+	// PublishBuildWorkload performs what a build's workload step does once it has
+	// generated the Workload: write it, record it on the WorkflowRun, cut a
+	// ComponentRelease named after the run and bind the project's first environment
+	// to it. See publishBuildWorkload for the exact contract.
+	PublishBuildWorkload(ctx context.Context, ouID string, req PublishBuildWorkloadRequest) error
 	GetBuild(ctx context.Context, ouID, projectName, componentName, buildName string) (*models.BuildDetailsResponse, error)
+	GetBuildByName(ctx context.Context, ouID, buildName string) (*models.BuildDetailsResponse, error)
 	ListBuilds(ctx context.Context, ouID, projectName, componentName string) ([]*models.BuildResponse, error)
 	UpdateComponentBuildParameters(ctx context.Context, ouID, projectName, componentName string, req UpdateComponentBuildParametersRequest) error
 

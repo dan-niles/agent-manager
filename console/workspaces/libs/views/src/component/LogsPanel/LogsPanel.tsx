@@ -80,6 +80,9 @@ const MONO_FONT_SIZE = "0.75rem";
 
 
 const ROW_HEIGHT = "2rem";
+
+/** Ragged widths so the placeholder reads as log output, not as blocks. */
+const SKELETON_LINE_WIDTHS = ["82%", "64%", "91%", "45%", "76%", "88%", "58%", "70%"];
 const TS_WIDTH = "11rem";
 const LV_WIDTH = "6rem";
 
@@ -305,19 +308,18 @@ export function LogsPanel({
                 }}
             >
                 {(showSearch || showPanel) && (
-                    <Stack direction="row" p={1} px={2} spacing={2} alignItems="center" justifyContent="flex-end">
+                    <Stack direction="row" p={1} px={2} spacing={2} alignItems="center">
                         {showSearch && (
-                            <Box display="flex" sx={{ flexGrow: 1, minWidth: 400 }}>
-                                <SearchBar
-                                    placeholder="Search logs..."
-                                    size="small"
-                                    fullWidth
-                                    onChange={(event: React.ChangeEvent<HTMLInputElement>) =>
-                                        onSearch?.(event.target.value)}
-                                    value={search}
-                                />
-                            </Box>
+                            <SearchBar
+                                placeholder="Search logs"
+                                size="small"
+                                width="standard"
+                                onChange={(event: React.ChangeEvent<HTMLInputElement>) =>
+                                    onSearch?.(event.target.value)}
+                                value={search}
+                            />
                         )}
+                        <Box sx={{ flexGrow: 1 }} />
                         {showPanel && (
                             <Tooltip title={wrap ? "Disable line wrap" : "Enable line wrap"}>
                                 <IconButton
@@ -334,9 +336,14 @@ export function LogsPanel({
                     </Stack>
                 )}
                 {isLoading && (
-                    <Stack direction="column" gap={1} p={2}>
-                        {Array.from({ length: 5 }).map((_, index) => (
-                            <Skeleton key={index} variant="rounded" height={60} width="100%" />
+                    <Stack direction="column" px={2} py={1} aria-hidden="true">
+                        {SKELETON_LINE_WIDTHS.map((width, index) => (
+                            <Box
+                                key={index}
+                                sx={{ display: "flex", alignItems: "center", minHeight: ROW_HEIGHT }}
+                            >
+                                <Skeleton variant="text" width={width} height={MONO_FONT_SIZE} />
+                            </Box>
                         ))}
                     </Stack>
                 )}

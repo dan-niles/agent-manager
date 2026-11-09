@@ -23,6 +23,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -123,7 +124,7 @@ func loadEnvs() {
 		SDKVolumeName: r.readOptionalString("OTEL_SDK_VOLUME_NAME", "otel-tracing-sdk-volume"),
 		SDKMountPath:  r.readOptionalString("OTEL_SDK_MOUNT_PATH", "/otel-tracing-sdk"),
 
-		DefaultInstrumentationVersion: r.readOptionalString("OTEL_DEFAULT_INSTRUMENTATION_VERSION", "0.4.2"),
+		DefaultInstrumentationVersion: r.readOptionalString("OTEL_DEFAULT_INSTRUMENTATION_VERSION", "0.5.0"),
 
 		InstrumentationExtensionPath: r.readOptionalString("INSTRUMENTATION_EXTENSION_PATH", "/etc/amp/instrumentation-extension.yaml"),
 
@@ -205,12 +206,12 @@ func loadEnvs() {
 		Token: r.readOptionalString("GITHUB_TOKEN", ""),
 	}
 
-	// Gateway manifest cache backend. "memory" (default) is process-local and only
-	// safe for a single replica; HA deployments must set this to "redis" so every
-	// replica reads and writes the same cached manifest.
 	config.GatewayPublicVhostFallback = r.readOptionalBool("GATEWAY_PUBLIC_VHOST_FALLBACK", false)
 	config.EvalJobsUsePublicGatewayURL = r.readOptionalBool("EVAL_JOBS_USE_PUBLIC_GATEWAY_URL", false)
 
+	// Gateway manifest cache backend. "memory" (default) is process-local and only
+	// safe for a single replica; HA deployments must set this to "redis" so every
+	// replica reads and writes the same per-gateway cached manifests.
 	config.GatewayManifestCache = GatewayManifestCacheConfig{
 		Backend: r.readOptionalString("GATEWAY_MANIFEST_CACHE_BACKEND", "memory"),
 		Redis: GatewayManifestCacheRedisConfig{
@@ -251,11 +252,13 @@ func loadEnvs() {
 	}
 
 	config.SecretManager = SecretManagerConfig{
-		Provider:                     r.readOptionalString("SECRET_MANAGER_PROVIDER", "openchoreo"),
-		TargetPlaneKind:              r.readOptionalString("SECRET_MANAGER_TARGET_PLANE_KIND", "ClusterDataPlane"),
-		TargetPlaneName:              r.readOptionalString("SECRET_MANAGER_TARGET_PLANE_NAME", "default"),
-		RefreshInterval:              r.readOptionalString("SECRET_MANAGER_REFRESH_INTERVAL", "1h"),
-		AgentIdentityRefreshInterval: r.readOptionalString("AGENT_IDENTITY_REFRESH_INTERVAL", "15s"),
+		Provider:                           r.readOptionalString("SECRET_MANAGER_PROVIDER", "openchoreo"),
+		TargetPlaneKind:                    r.readOptionalString("SECRET_MANAGER_TARGET_PLANE_KIND", "ClusterDataPlane"),
+		TargetPlaneName:                    r.readOptionalString("SECRET_MANAGER_TARGET_PLANE_NAME", "default"),
+		RefreshInterval:                    r.readOptionalString("SECRET_MANAGER_REFRESH_INTERVAL", "1h"),
+		AgentIdentityRefreshInterval:       r.readOptionalString("AGENT_IDENTITY_REFRESH_INTERVAL", "10m"),
+		AgentIdentityForceSyncWait:         r.readOptionalString("AGENT_IDENTITY_FORCE_SYNC_WAIT", "20s"),
+		AgentIdentityForceSyncApplyTimeout: r.readOptionalString("AGENT_IDENTITY_FORCE_SYNC_APPLY_TIMEOUT", "2m"),
 	}
 
 	// OpenBao KV store configuration (data plane - for deployment secrets)
@@ -280,6 +283,8 @@ func loadEnvs() {
 		UseDefaultResourceServer: r.readOptionalBool("AMP_USE_THUNDER_DEFAULT_RESOURCE_SERVER", false),
 		SystemResourceIdentifier: r.readOptionalString("AMP_THUNDER_SYSTEM_RESOURCE_IDENTIFIER", ""),
 	}
+	config.IdentityManagementMode = r.readOptionalString("IDENTITY_MANAGEMENT_MODE", "LEGACY_DIRECT")
+	validateIdentityManagementMode(config, r)
 	if config.Thunder.BaseURL != "" && (config.Thunder.ClientID == "" || config.Thunder.ClientSecret == "") {
 		r.errors = append(r.errors, fmt.Errorf("THUNDER_BASE_URL is set but THUNDER_CLIENT_ID and/or THUNDER_CLIENT_SECRET are missing"))
 	}
@@ -294,6 +299,14 @@ func loadEnvs() {
 		}
 	}
 	validateThunderConfig(config, r)
+
+	config.BuildClient = BuildClientConfig{
+		Enabled: r.readOptionalBool("AMP_BUILD_CLIENT_ENABLED", false),
+		Workflows: r.readOptionalStringList("AMP_BUILD_CLIENT_WORKFLOWS",
+			"amp-docker,amp-ballerina-buildpack,amp-google-cloud-buildpacks"),
+		SecretStore: strings.TrimSpace(r.readOptionalString("AMP_BUILD_CLIENT_SECRET_STORE", "")),
+	}
+	validateBuildClientConfig(config, r)
 
 	config.TLSConfig = TLSConfig{
 		EnableTLS: r.readOptionalBool("TLS_ENABLED", false),
@@ -310,6 +323,19 @@ func loadEnvs() {
 	if config.PlatformAdminOUID == "" {
 		slog.Warn("PLATFORM_ADMIN_OU_ID is not set; cross-organization platform routes will deny every request")
 	}
+	config.DeploymentTimeout = DeploymentTimeoutConfig{
+		SweepIntervalSeconds: int(r.readOptionalInt64("DEPLOYMENT_TIMEOUT_SWEEP_INTERVAL_SECONDS", 60)),
+		TimeoutSeconds:       int(r.readOptionalInt64("DEPLOYMENT_TIMEOUT_SECONDS", 300)),
+	}
+	validateDeploymentTimeoutConfig(config, r)
+	config.Reconcile = ReconcileConfig{
+		RenderIntervalSeconds: int(r.readOptionalInt64("RECONCILE_RENDER_INTERVAL_SECONDS", 5)),
+		PlaceIntervalSeconds:  int(r.readOptionalInt64("RECONCILE_PLACE_INTERVAL_SECONDS", 600)),
+		DriftIntervalSeconds:  int(r.readOptionalInt64("RECONCILE_DRIFT_INTERVAL_SECONDS", 300)),
+		RenderLeaseSeconds:    int(r.readOptionalInt64("RECONCILE_RENDER_LEASE_SECONDS", 120)),
+		RenderAttemptBudget:   int(r.readOptionalInt64("RECONCILE_RENDER_ATTEMPT_BUDGET", 30)),
+	}
+	validateReconcileConfig(config, r)
 	config.GatewayFailureThresholdSeconds = int(r.readOptionalInt64("GATEWAY_FAILURE_THRESHOLD_SECONDS", 300))
 	if config.GatewayFailureThresholdSeconds <= 0 {
 		r.errors = append(r.errors, fmt.Errorf(
@@ -355,6 +381,23 @@ func loadEnvs() {
 	}
 	r.errors = append(r.errors, validateAuditConfig(config.Audit)...)
 
+	// Events default to off, so an install without a bus behaves as before.
+	config.Events = EventsConfig{
+		Mode:                     r.readOptionalString("EVENTS_MODE", ""),
+		NATSURL:                  r.readOptionalString("EVENTS_NATS_URL", ""),
+		NATSToken:                r.readOptionalString("EVENTS_NATS_TOKEN", ""),
+		AllowPrivateDestinations: r.readOptionalBool("EVENTS_ALLOW_PRIVATE_DESTINATIONS", false),
+		DeliveryMaxAttempts:      int(r.readOptionalInt64("EVENTS_DELIVERY_MAX_ATTEMPTS", 6)),
+		DeliveryRetentionDays:    int(r.readOptionalInt64("EVENTS_DELIVERY_RETENTION_DAYS", 14)),
+	}
+	if config.Events.Mode == "" {
+		config.Events.Mode = EventsModeOff
+		if config.Events.NATSURL != "" {
+			config.Events.Mode = EventsModeNATS
+		}
+	}
+	r.errors = append(r.errors, validateEventsConfig(config.Events)...)
+
 	// Resource limits for agent resource configurations (operator-controlled ceilings)
 	config.PerAgentResourceLimits = ResourceLimitsConfig{
 		MaxReplicas: int(r.readOptionalInt64("RESOURCE_MAX_REPLICAS", 10)),
@@ -399,6 +442,14 @@ func loadEnvs() {
 	slog.Info("configReader: configs loaded")
 }
 
+func validateIdentityManagementMode(cfg *Config, r *configReader) {
+	switch cfg.IdentityManagementMode {
+	case "LEGACY_DIRECT", "CP_MANAGED":
+	default:
+		r.errors = append(r.errors, fmt.Errorf("IDENTITY_MANAGEMENT_MODE must be LEGACY_DIRECT or CP_MANAGED"))
+	}
+}
+
 // validPostgresSSLModes is the set of libpq sslmode values pgx accepts. Kept as
 // an explicit allowlist so a typo fails config load with a clear message instead
 // of surfacing as an opaque driver parse error at first connect.
@@ -416,17 +467,49 @@ var validPostgresSSLModes = map[string]struct{}{
 // agentIdentityInjectionService's own default at first use (see
 // secretSyncWaitDuration's doc comment).
 func validateSecretManagerConfig(cfg *Config, r *configReader) {
-	d, err := time.ParseDuration(cfg.SecretManager.AgentIdentityRefreshInterval)
+	validatePositiveDuration(r, "AGENT_IDENTITY_REFRESH_INTERVAL", cfg.SecretManager.AgentIdentityRefreshInterval)
+	validatePositiveDuration(r, "AGENT_IDENTITY_FORCE_SYNC_WAIT", cfg.SecretManager.AgentIdentityForceSyncWait)
+	validatePositiveDuration(r, "AGENT_IDENTITY_FORCE_SYNC_APPLY_TIMEOUT", cfg.SecretManager.AgentIdentityForceSyncApplyTimeout)
+}
+
+func validatePositiveDuration(r *configReader, name, value string) {
+	d, err := time.ParseDuration(value)
 	switch {
 	case err != nil:
-		r.errors = append(r.errors, fmt.Errorf(
-			"AGENT_IDENTITY_REFRESH_INTERVAL %q is not a valid duration: %w", cfg.SecretManager.AgentIdentityRefreshInterval, err,
-		))
+		r.errors = append(r.errors, fmt.Errorf("%s %q is not a valid duration: %w", name, value, err))
 	case d <= 0:
-		r.errors = append(r.errors, fmt.Errorf(
-			"AGENT_IDENTITY_REFRESH_INTERVAL must be a positive duration, got %q", cfg.SecretManager.AgentIdentityRefreshInterval,
-		))
+		r.errors = append(r.errors, fmt.Errorf("%s must be a positive duration, got %q", name, value))
 	}
+}
+
+type positiveField struct {
+	name  string
+	value int
+}
+
+func requirePositive(r *configReader, fields ...positiveField) {
+	for _, field := range fields {
+		if field.value <= 0 {
+			r.errors = append(r.errors, fmt.Errorf("%s must be greater than 0, got %d", field.name, field.value))
+		}
+	}
+}
+
+func validateDeploymentTimeoutConfig(cfg *Config, r *configReader) {
+	requirePositive(r,
+		positiveField{"DEPLOYMENT_TIMEOUT_SWEEP_INTERVAL_SECONDS", cfg.DeploymentTimeout.SweepIntervalSeconds},
+		positiveField{"DEPLOYMENT_TIMEOUT_SECONDS", cfg.DeploymentTimeout.TimeoutSeconds},
+	)
+}
+
+func validateReconcileConfig(cfg *Config, r *configReader) {
+	requirePositive(r,
+		positiveField{"RECONCILE_RENDER_INTERVAL_SECONDS", cfg.Reconcile.RenderIntervalSeconds},
+		positiveField{"RECONCILE_PLACE_INTERVAL_SECONDS", cfg.Reconcile.PlaceIntervalSeconds},
+		positiveField{"RECONCILE_DRIFT_INTERVAL_SECONDS", cfg.Reconcile.DriftIntervalSeconds},
+		positiveField{"RECONCILE_RENDER_LEASE_SECONDS", cfg.Reconcile.RenderLeaseSeconds},
+		positiveField{"RECONCILE_RENDER_ATTEMPT_BUDGET", cfg.Reconcile.RenderAttemptBudget},
+	)
 }
 
 // validGatewayManifestCacheBackends is the set of backends services.ProvideGatewayManifestCacheBackend
@@ -543,6 +626,75 @@ func validateThunderConfig(cfg *Config, r *configReader) {
 			"AMP_THUNDER_SYSTEM_RESOURCE_IDENTIFIER %q must have a non-empty host", thunder.SystemResourceIdentifier,
 		))
 	}
+}
+
+// validateBuildClientConfig checks the build-token settings together. A build
+// token is minted with this service's own identity provider client on the
+// organization token endpoint derived from IDP_TOKEN_URL, so enabling it without
+// that client, or with a token URL the endpoint cannot be derived from, would make
+// every build that takes the token fail rather than the service fail at startup;
+// and an empty workflow list would leave the flag on with nothing it could ever
+// apply to.
+func validateBuildClientConfig(cfg *Config, r *configReader) {
+	if !cfg.BuildClient.Enabled {
+		return
+	}
+	if _, err := OrganizationTokenURL(cfg.IDP.TokenURL, "ou"); err != nil {
+		r.errors = append(r.errors, fmt.Errorf("AMP_BUILD_CLIENT_ENABLED requires a usable IDP_TOKEN_URL: %w", err))
+	}
+	if strings.TrimSpace(cfg.IDP.ClientID) == "" || cfg.IDP.ClientSecret == "" {
+		r.errors = append(r.errors, fmt.Errorf("AMP_BUILD_CLIENT_ENABLED requires IDP_CLIENT_ID and IDP_CLIENT_SECRET"))
+	}
+	if len(cfg.BuildClient.Workflows) == 0 {
+		r.errors = append(r.errors, fmt.Errorf("AMP_BUILD_CLIENT_ENABLED requires at least one AMP_BUILD_CLIENT_WORKFLOWS entry"))
+	}
+	if store := cfg.BuildClient.SecretStore; store != "" && !secretStoreNamePattern.MatchString(store) {
+		r.errors = append(r.errors, fmt.Errorf("AMP_BUILD_CLIENT_SECRET_STORE %q is not a valid ClusterSecretStore name", store))
+	}
+}
+
+// secretStoreNamePattern is a Kubernetes object name (RFC 1123 subdomain): what a
+// ClusterSecretStore may be called.
+var secretStoreNamePattern = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$`)
+
+// organizationTokenPathSuffix is the token endpoint path an organization token
+// endpoint is derived from.
+const organizationTokenPathSuffix = "/oauth2/token"
+
+// organizationIDPattern is what an organization (organization unit) ID may look
+// like in an organization token endpoint path: one path segment of letters,
+// digits, '.', '_' and '-' (identity provider OU IDs are UUIDs), so it never needs
+// escaping and can never add or climb a path segment.
+var organizationIDPattern = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+
+// OrganizationTokenURL returns the identity provider's token endpoint for one
+// organization: tokenURL, an absolute http(s) URL whose path ends in
+// /oauth2/token, with /ou/<ouID> inserted before that suffix. A token issued there
+// is scoped to that organization (its ouId claim names it).
+func OrganizationTokenURL(tokenURL, ouID string) (string, error) {
+	if !organizationIDPattern.MatchString(ouID) || ouID == "." || ouID == ".." {
+		return "", fmt.Errorf("invalid organization ID %q", ouID)
+	}
+	parsed, err := url.Parse(strings.TrimSpace(tokenURL))
+	if err != nil {
+		return "", fmt.Errorf("invalid token URL: %w", err)
+	}
+	if (parsed.Scheme != "https" && parsed.Scheme != "http") || parsed.Host == "" {
+		return "", fmt.Errorf("token URL must be an absolute http(s) URL")
+	}
+	if parsed.RawQuery != "" || parsed.Fragment != "" {
+		return "", fmt.Errorf("token URL must not carry a query or fragment")
+	}
+	prefix, ok := strings.CutSuffix(parsed.Path, organizationTokenPathSuffix)
+	if !ok {
+		return "", fmt.Errorf("token URL path must end with %s", organizationTokenPathSuffix)
+	}
+	if strings.Contains(prefix+"/", "/ou/") {
+		return "", fmt.Errorf("token URL must be the identity provider's own token endpoint, not an organization's")
+	}
+	parsed.Path = prefix + "/ou/" + ouID + organizationTokenPathSuffix
+	parsed.RawPath = ""
+	return parsed.String(), nil
 }
 
 // validateOpenChoreoBuildWorkflowKind accepts only the kinds OpenChoreo knows, or
@@ -815,6 +967,29 @@ func validateAuditConfig(cfg AuditConfig) []error {
 			"AUDIT_BATCH_SIZE (%d) must not exceed AUDIT_BUFFER_SIZE (%d)",
 			cfg.BatchSize, cfg.BufferSize,
 		))
+	}
+	return errs
+}
+
+// validateEventsConfig checks the event bus settings.
+func validateEventsConfig(cfg EventsConfig) []error {
+	var errs []error
+	switch cfg.Mode {
+	case EventsModeOff:
+		return nil
+	case EventsModeEmbedded:
+	case EventsModeNATS:
+		if cfg.NATSURL == "" {
+			errs = append(errs, fmt.Errorf("EVENTS_NATS_URL is required when EVENTS_MODE is nats"))
+		}
+	default:
+		return []error{fmt.Errorf("EVENTS_MODE must be nats, embedded or off, got %q", cfg.Mode)}
+	}
+	if cfg.DeliveryMaxAttempts <= 0 {
+		errs = append(errs, fmt.Errorf("EVENTS_DELIVERY_MAX_ATTEMPTS must be positive, got %d", cfg.DeliveryMaxAttempts))
+	}
+	if cfg.DeliveryRetentionDays <= 0 {
+		errs = append(errs, fmt.Errorf("EVENTS_DELIVERY_RETENTION_DAYS must be positive, got %d", cfg.DeliveryRetentionDays))
 	}
 	return errs
 }

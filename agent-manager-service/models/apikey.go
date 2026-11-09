@@ -38,6 +38,9 @@ const (
 	// Each user gets their own row (prefix + truncated SHA-256 of their JWT sub),
 	// so concurrent sessions across users don't invalidate each other's keys.
 	APIKeyTestKeyPrefix = "console-test-"
+	// MinAPIKeyNameLength is the shortest key name the gateway accepts. It
+	// rejects shorter names asynchronously, after the API has answered.
+	MinAPIKeyNameLength = 3
 )
 
 // StoredAPIKey represents an API key persisted in the database for gateway bulk-sync
@@ -84,6 +87,14 @@ type CreateAPIKeyRequest struct {
 	Purpose int `json:"purpose,omitempty"`
 
 	// ExpiresAt is the optional expiration time in ISO 8601 format
+	ExpiresAt *string `json:"expiresAt,omitempty"`
+}
+
+// IssueBindingTestAPIKeyRequest is the body of POST .../mcp-proxies/{proxyId}/environments/{envName}/api-keys/test.
+type IssueBindingTestAPIKeyRequest struct {
+	// ForUser is the caller's user the key is issued for. It picks the user's key slots.
+	ForUser string `json:"forUser"`
+	// ExpiresAt is the optional expiry in RFC 3339; one hour from now when omitted.
 	ExpiresAt *string `json:"expiresAt,omitempty"`
 }
 

@@ -20,12 +20,19 @@ import { useState } from "react";
 import { Alert, Box, Button, Chip, CircularProgress, IconButton, Stack, Tooltip, Typography } from "@wso2/oxygen-ui";
 import { Edit, RefreshCw, Trash } from "@wso2/oxygen-ui-icons-react";
 import {
-  isAgentCardNotFound, useDeleteAgentCardSource, useGetAgentCard, useRefreshAgentCard,
+  useDeleteAgentCardSource,
+  useGetA2AProxy,
+  useGetAgentCard,
+  useIsSavingA2AProxy,
+  useRefreshAgentCard,
 } from "@agent-management-platform/api-client";
 import { CodeBlock, OverviewSectionCard, useConfirmationDialog } from "@agent-management-platform/shared-component";
 import { TextInput } from "@agent-management-platform/views";
 import type { AgentCardStatus } from "@agent-management-platform/types";
+import { useResourceAccess } from "@agent-management-platform/feature-management";
+import { hasStoredSecret, KEEP_ORIGIN_HINT } from "./a2aProxyDraft";
 import { AgentCardSourceForm } from "./AgentCardSourceForm";
+import { A2AProxyUnknown, EnvA2AProxySection } from "./EnvA2AProxySection";
 
 interface A2AAgentCardPanelProps {
   orgId: string;
@@ -53,23 +60,34 @@ export function A2AAgentCardPanel({
   orgId, projectId, agentId, envId, external,
 }: A2AAgentCardPanelProps) {
   const params = { orgName: orgId, projName: projectId, agentName: agentId, envId };
-  const { data, isLoading, isError, error } = useGetAgentCard(params);
+  const { data: proxyData, isError: proxyIsError } =
+    useGetA2AProxy(params, { enabled: !!external });
+  const proxyIsDirect = proxyData === null;
+  const proxy = proxyData ?? undefined;
+  const proxySaving = useIsSavingA2AProxy(params);
+  // A failed background refetch keeps the last known routing on screen.
+  const proxyKnown = proxyData !== undefined;
+  const proxyFailed = proxy?.status === "FAILED";
+  const { data, isLoading, isError } = useGetAgentCard(params, { poll: !proxyFailed });
   const { mutate: refresh, isPending: isRefreshing } = useRefreshAgentCard();
   const { mutate: removeSource, isPending: isRemoving } = useDeleteAgentCardSource();
   const { addConfirmation } = useConfirmationDialog();
+  const { canWrite } = useResourceAccess("agent");
   const [showJson, setShowJson] = useState(false);
   const [editingUrl, setEditingUrl] = useState(false);
 
-  const noSource = isError && isAgentCardNotFound(error);
-  // A 404 leaves the previous card cached; it no longer exists.
-  const card = noSource ? undefined : data;
+  const noSource = data === null;
+  const card = data ?? undefined;
+  // A failed gateway deploy parks the card, so "Pending" would never clear; the alert says why.
+  const parkedBehindFailedPublish = proxyFailed && card?.status === "pending";
   // Card content is third-party: read it as untyped JSON.
   const cardJson: Json = isObject(card?.card) ? card.card : {};
   const cardName = asString(cardJson.name);
   const cardDescription = asString(cardJson.description);
   const version = asString(cardJson.version)?.replace(/^v/i, "");
   const sourceUrl = card?.sourceUrl;
-  const showUrlForm = external && noSource;
+  const showUrlForm = canWrite && external && noSource;
+  const secretPinsOrigin = hasStoredSecret(proxy);
 
   const confirmRemove = () => addConfirmation({
     analytics: { entity: "agent-card-source", action: "remove" },
@@ -85,11 +103,12 @@ export function A2AAgentCardPanel({
     <OverviewSectionCard
       title="Agent Card"
       titleAdornment={
-        sourceUrl && (editingUrl ? (
+        sourceUrl && (canWrite && editingUrl ? (
           <AgentCardSourceForm
             inline
             params={params}
             currentUrl={sourceUrl}
+            keepOrigin={secretPinsOrigin}
             onDone={() => setEditingUrl(false)}
           />
         ) : (
@@ -97,7 +116,7 @@ export function A2AAgentCardPanel({
             <Typography variant="body2" color="text.secondary" noWrap sx={{ fontFamily: "monospace" }}>
               {sourceUrl}
             </Typography>
-            {external && (
+            {canWrite && external && (
               <Tooltip title="Edit URL">
                 <IconButton size="small" onClick={() => setEditingUrl(true)} sx={{ p: 0.25, flexShrink: 0 }}>
                   <Edit size={14} />
@@ -108,7 +127,7 @@ export function A2AAgentCardPanel({
         ))
       }
       headerAction={
-        !(noSource && external) && (
+        canWrite && !(noSource && external) && (
           <Button
             size="small"
             variant="text"
@@ -121,14 +140,34 @@ export function A2AAgentCardPanel({
         )
       }
     >
-      {showUrlForm && (
-        <AgentCardSourceForm params={params} currentUrl={sourceUrl} />
+      {canWrite && editingUrl && secretPinsOrigin && (
+        <Alert severity="info" sx={{ mb: 1 }}>{KEEP_ORIGIN_HINT}</Alert>
       )}
+      {showUrlForm && (
+        <>
+          <AgentCardSourceForm
+            params={params}
+            currentUrl={sourceUrl}
+            offerRouting={proxyIsDirect}
+          />
+          {!proxyKnown && <A2AProxyUnknown failed={proxyIsError} />}
+        </>
+      )}
+      {external && sourceUrl && (proxyKnown
+        ? (
+          <EnvA2AProxySection
+            params={params}
+            cardUrl={sourceUrl}
+            proxy={proxy}
+            saving={proxySaving}
+          />
+        )
+        : <A2AProxyUnknown failed={proxyIsError} />)}
       {isLoading && <CircularProgress size={16} />}
       {noSource && (
         <Typography variant="body2" color="text.secondary">
           {external
-            ? "Register this agent's card URL for the environment to fetch its card."
+            ? "No agent card URL is registered for this environment. Register one to serve this agent over A2A."
             : "No agent card has been fetched for this environment yet."}
         </Typography>
       )}
@@ -138,7 +177,7 @@ export function A2AAgentCardPanel({
       {card && (
         <>
           <Box display="flex" alignItems="center" gap={1} sx={{ mb: 1 }}>
-            {card.status !== "fetched" && (
+            {card.status !== "fetched" && !parkedBehindFailedPublish && (
               <Chip
                 variant="outlined"
                 size="small"
@@ -231,7 +270,7 @@ export function A2AAgentCardPanel({
           )}
         </>
       )}
-      {external && sourceUrl && (
+      {canWrite && external && sourceUrl && (
         <Box display="flex" justifyContent="flex-end" sx={{ mt: 3 }}>
           <Button
             size="small"

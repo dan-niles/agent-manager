@@ -59,7 +59,6 @@ import {
   Trash2,
   Zap,
 } from "@wso2/oxygen-ui-icons-react";
-import { formatDistanceToNow } from "date-fns";
 import { useParams, generatePath } from "react-router-dom";
 import {
   useListCatalogLLMProviders,
@@ -69,13 +68,16 @@ import {
 import {
   ballerinaConfigurableFor,
   BallerinaConfigurablesNotice,
+  formatRelativeTime,
   PolicyListSection,
   type PolicySelection as GuardrailSelection,
 } from "@agent-management-platform/shared-component";
 import { AGENT_ENV_KEY_MAX_LENGTH, type LLMProviderFormEntry } from "../form/schema";
 import { envVarNaming, type EnvVarNaming } from "../utils/envVarNaming";
+import { SlotPortal } from "./OptionalSection";
 import {
   absoluteRouteMap,
+  withBasePath,
   type CatalogRateLimitingSummary,
   type CatalogSecuritySummary,
 } from "@agent-management-platform/types";
@@ -242,7 +244,7 @@ const ProviderDisplay: React.FC<{
         </Stack>
         {latest?.deployedAt && (
           <Typography variant="caption" color="text.secondary">
-            Deployed {formatDistanceToNow(new Date(latest.deployedAt), { addSuffix: true })}
+            Deployed {formatRelativeTime(latest.deployedAt)}
           </Typography>
         )}
         <Divider orientation="vertical" />
@@ -435,7 +437,7 @@ const EntryCard: React.FC<EntryCardProps> = ({
                 startIcon={<Plus size={16} />}
                 onClick={handleOpenDrawer}
               >
-                Select Provider for {environments[selectedEnvIndex]?.displayName ?? selectedEnvName}
+                Select provider for {environments[selectedEnvIndex]?.displayName ?? selectedEnvName}
               </Button>
             )}
           </Box>
@@ -509,14 +511,14 @@ const EntryCard: React.FC<EntryCardProps> = ({
           <PolicyListSection
             title="Guardrails"
             description="Add safety policies to enforce consistent protections."
-            addButtonLabel="Add Guardrail"
+            addButtonLabel="Add guardrail"
             drawerAddTitle="Add Guardrail"
             drawerEditTitle="Edit Guardrail"
             drawerAddSubtitle="Choose a guardrail to configure advanced options."
             drawerEditSubtitle="Update the guardrail configuration."
             policyNoun="guardrail"
             loadingLabel="Loading guardrails..."
-            searchPlaceholder="Search guardrails..."
+            searchPlaceholder="Search guardrails"
             catalogErrorLabel="Failed to load guardrails."
             emptySearchTitle="No guardrails match your search"
             emptyCatalogTitle="No guardrails available"
@@ -544,6 +546,10 @@ interface LLMProviderSectionProps {
   initialEnvironmentName: string | undefined;
   isInitialEnvironmentLoading?: boolean;
   externalEnvKeys?: Set<string>;
+  /** The parent already titles this section (e.g. an accordion). */
+  hideHeading?: boolean;
+  /** Render the add button here (e.g. a parent accordion header) instead of below the entries. */
+  actionSlot?: HTMLElement | null;
 }
 
 export const LLMProviderSection: React.FC<LLMProviderSectionProps> = ({
@@ -554,6 +560,8 @@ export const LLMProviderSection: React.FC<LLMProviderSectionProps> = ({
   initialEnvironmentName,
   isInitialEnvironmentLoading = false,
   externalEnvKeys = new Set(),
+  hideHeading = false,
+  actionSlot,
 }) => {
   const { orgId } = useParams<{ orgId: string }>();
 
@@ -585,7 +593,7 @@ export const LLMProviderSection: React.FC<LLMProviderSectionProps> = ({
     { limit: 50, environmentId: drawerEnvironmentId },
   );
 
-  // The "Add LLM Provider" action opens in a new tab (see below) so the
+  // The "Add LLM provider" action opens in a new tab (see below) so the
   // Create Agent form's state is never unmounted. Refetch the catalog when
   // the user tabs back so a freshly created provider shows up without them
   // having to manually refresh.
@@ -735,9 +743,26 @@ export const LLMProviderSection: React.FC<LLMProviderSectionProps> = ({
     searchTimerRef.current = setTimeout(() => setDebouncedSearch(val), 250);
   }, []);
 
+  const addButton = (
+        <Button
+          variant="outlined"
+          size="small"
+          startIcon={<Plus size={16} />}
+          onClick={handleAddNew}
+          disabled={
+            envsLoading ||
+            isInitialEnvironmentLoading ||
+            catalogLoading ||
+            targetEnvironments.length === 0
+          }
+        >
+          Add LLM provider
+        </Button>
+  );
+
   return (
-    <Form.Section>
-      <Form.Subheader>LLM Providers (Optional)</Form.Subheader>
+    <Stack spacing={2}>
+      {!hideHeading && <Typography variant="subtitle1">LLM Providers (Optional)</Typography>}
 
       <Stack spacing={1}>
         {llmProviders.map((entry, index) => {
@@ -768,20 +793,7 @@ export const LLMProviderSection: React.FC<LLMProviderSectionProps> = ({
         })}
 
         <Box sx={{ pt: llmProviders.length > 0 ? 1 : 0 }}>
-            <Button
-              variant="outlined"
-              size="small"
-              startIcon={<Plus size={16} />}
-              onClick={handleAddNew}
-              disabled={
-                envsLoading ||
-                isInitialEnvironmentLoading ||
-                catalogLoading ||
-                targetEnvironments.length === 0
-              }
-            >
-              Add
-            </Button>
+          <SlotPortal slot={actionSlot}>{addButton}</SlotPortal>
         </Box>
       </Stack>
 
@@ -854,15 +866,15 @@ export const LLMProviderSection: React.FC<LLMProviderSectionProps> = ({
                             size="small"
                             startIcon={<Link size={16} />}
                             component="a"
-                            href={generatePath(
+                            href={withBasePath(generatePath(
                               absoluteRouteMap.children.org.children.
                                 llmProviders.children.add.path,
                               { orgId },
-                            )}
+                            ))}
                             target="_blank"
                             rel="noopener noreferrer"
                           >
-                            Add LLM Service Provider
+                            Add LLM service provider
                           </Button>
                         ) : undefined
                       }
@@ -898,10 +910,10 @@ export const LLMProviderSection: React.FC<LLMProviderSectionProps> = ({
                 <Divider sx={{ mt: 2 }} />
                 <Box
                   component="a"
-                  href={generatePath(
+                  href={withBasePath(generatePath(
                     absoluteRouteMap.children.org.children.llmProviders.children.add.path,
                     { orgId },
-                  )}
+                  ))}
                   target="_blank"
                   rel="noopener noreferrer"
                   sx={{
@@ -917,7 +929,7 @@ export const LLMProviderSection: React.FC<LLMProviderSectionProps> = ({
                 >
                   <Plus size={16} />
                   <Typography variant="body2" color="primary">
-                    Add LLM Provider
+                    Add LLM provider
                   </Typography>
                   <ExternalLink size={14} />
                 </Box>
@@ -926,6 +938,6 @@ export const LLMProviderSection: React.FC<LLMProviderSectionProps> = ({
           </Stack>
         </DrawerContent>
       </DrawerWrapper>
-    </Form.Section>
+    </Stack>
   );
 };

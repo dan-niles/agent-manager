@@ -19,8 +19,10 @@
 import { z } from 'zod';
 import { chatAgentHasOwnEndpoint } from "../utils/chatInterface";
 import {
+  type HealthChecks,
   type InputInterfaceType,
   INPUT_LIMITS,
+  healthChecksAreValid,
   formatBytes,
   getFileMountMaxFileBytes,
   utf8ByteLength,
@@ -73,6 +75,9 @@ const isBuildPath = (value: string): boolean =>
 const gitHubRepoUrlRe = /^https:\/\/github\.com\/[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+(?:\.git)?\/?$/;
 
 // Base fields shared by both flows
+/** The backend's MaxResourceNameLength for agent names. */
+export const AGENT_NAME_MAX_LENGTH = 25;
+
 const baseAgentFields = {
   displayName: z
     .string()
@@ -83,7 +88,11 @@ const baseAgentFields = {
   name: z
     .string()
     .trim()
-    .max(50, 'Name must be at most 50 characters'),
+    .max(AGENT_NAME_MAX_LENGTH, `Name must be at most ${AGENT_NAME_MAX_LENGTH} characters`)
+    .refine(
+      (v) => v === '' || /^[a-z][a-z0-9-]*[a-z0-9]$|^[a-z]$/.test(v),
+      'Name must be lowercase alphanumeric or "-", start with a letter and end with a letter or digit',
+    ),
   description: z
     .string()
     .trim()
@@ -99,7 +108,6 @@ const baseAgentFields = {
 export const connectAgentSchema = z.object({
   ...baseAgentFields,
   deploymentType: z.literal('existing').optional(),
-  externalSubType: z.enum(['custom-api', 'a2a-agent']).optional(),
 });
 
 // Schema for creating a new agent from source (full validation)
@@ -180,6 +188,14 @@ export const createAgentSchema = z.object({
       { message: 'App path must be a valid path (use / for root directory)' }
     ),
   gitSecretRef: z.string().trim().optional(),
+  githubApp: z.object({
+    installationId: z.number().int().positive(),
+    owner: z.string().trim().min(1),
+    repo: z.string().trim().min(1),
+    branch: z.string().trim().min(1),
+    appPath: z.string().trim().min(1),
+    repositoryUrl: z.string().url(),
+  }).optional(),
   // runCommand is the container's start command by design -- the buildpack makes
   // it PID 1 under a shell -- so it is deliberately left unconstrained.
   runCommand: z.string().trim().optional(),
@@ -193,6 +209,13 @@ export const createAgentSchema = z.object({
     })
     .optional(),
   interfaceType: z.enum(['DEFAULT', 'CUSTOM', 'A2A']),
+  // Only readiness is set on the create page; the rest use the defaults.
+  healthChecks: z
+    .custom<HealthChecks>(
+      (value) => healthChecksAreValid(value as HealthChecks | undefined),
+      'Fix the highlighted readiness check fields',
+    )
+    .optional(),
   port: z
     .union([z.number(), z.string(), z.undefined()])
     .transform((val) => {
@@ -230,9 +253,21 @@ export const createAgentSchema = z.object({
           .max(2048, 'Environment variable value must be at most 2048 characters')
           .optional(),
         isSensitive: z.boolean().default(false),
+        // Set only by an Agent Kind's config schema (deriveCatalogEnvSeed) for a
+        // kind-declared secret that has a real default — the default itself is
+        // never sent to the client, so an empty value here means "use the kind's
+        // default", not "left blank by mistake", and must skip the check below.
+        isInherited: z.boolean().optional(),
       })
     )
-    .max(50, 'A maximum of 50 environment variables is allowed'),
+    .max(50, 'A maximum of 50 environment variables is allowed')
+    // A row with a name but no value would otherwise be silently dropped when
+    // the payload is built, deploying without a variable the user thought
+    // they'd set — surface it instead of dropping it.
+    .refine(
+      (rows) => rows.every((row) => row.isInherited || !row.key?.trim() || !!row.value?.trim()),
+      { message: 'Every environment variable with a name must also have a value' },
+    ),
   files: z
     .array(
       z.object({

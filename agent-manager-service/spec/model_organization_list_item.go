@@ -22,6 +22,10 @@ var _ MappedNullable = &OrganizationListItem{}
 type OrganizationListItem struct {
 	// Name of the organization
 	Name string `json:"name"`
+	// Display name of the organization
+	DisplayName string `json:"displayName"`
+	// Human-readable handle of the organization (the caller's OU handle), used in console URLs. Omitted when it cannot be determined.
+	Handle *string `json:"handle,omitempty"`
 	// Timestamp when the organization was created
 	CreatedAt time.Time `json:"createdAt"`
 }
@@ -30,9 +34,10 @@ type OrganizationListItem struct {
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewOrganizationListItem(name string, createdAt time.Time) *OrganizationListItem {
+func NewOrganizationListItem(name string, displayName string, createdAt time.Time) *OrganizationListItem {
 	this := OrganizationListItem{}
 	this.Name = name
+	this.DisplayName = displayName
 	this.CreatedAt = createdAt
 	return &this
 }
@@ -67,6 +72,62 @@ func (o *OrganizationListItem) GetNameOk() (*string, bool) {
 // SetName sets field value
 func (o *OrganizationListItem) SetName(v string) {
 	o.Name = v
+}
+
+// GetDisplayName returns the DisplayName field value
+func (o *OrganizationListItem) GetDisplayName() string {
+	if o == nil {
+		var ret string
+		return ret
+	}
+
+	return o.DisplayName
+}
+
+// GetDisplayNameOk returns a tuple with the DisplayName field value
+// and a boolean to check if the value has been set.
+func (o *OrganizationListItem) GetDisplayNameOk() (*string, bool) {
+	if o == nil {
+		return nil, false
+	}
+	return &o.DisplayName, true
+}
+
+// SetDisplayName sets field value
+func (o *OrganizationListItem) SetDisplayName(v string) {
+	o.DisplayName = v
+}
+
+// GetHandle returns the Handle field value if set, zero value otherwise.
+func (o *OrganizationListItem) GetHandle() string {
+	if o == nil || IsNil(o.Handle) {
+		var ret string
+		return ret
+	}
+	return *o.Handle
+}
+
+// GetHandleOk returns a tuple with the Handle field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *OrganizationListItem) GetHandleOk() (*string, bool) {
+	if o == nil || IsNil(o.Handle) {
+		return nil, false
+	}
+	return o.Handle, true
+}
+
+// HasHandle returns a boolean if a field has been set.
+func (o *OrganizationListItem) HasHandle() bool {
+	if o != nil && !IsNil(o.Handle) {
+		return true
+	}
+
+	return false
+}
+
+// SetHandle gets a reference to the given string and assigns it to the Handle field.
+func (o *OrganizationListItem) SetHandle(v string) {
+	o.Handle = &v
 }
 
 // GetCreatedAt returns the CreatedAt field value
@@ -104,6 +165,10 @@ func (o OrganizationListItem) MarshalJSON() ([]byte, error) {
 func (o OrganizationListItem) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
 	toSerialize["name"] = o.Name
+	toSerialize["displayName"] = o.DisplayName
+	if !IsNil(o.Handle) {
+		toSerialize["handle"] = o.Handle
+	}
 	toSerialize["createdAt"] = o.CreatedAt
 	return toSerialize, nil
 }

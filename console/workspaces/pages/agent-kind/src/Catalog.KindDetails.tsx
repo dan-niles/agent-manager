@@ -18,8 +18,14 @@
 
 
 import React, { useMemo, useState } from "react";
-import { formatDistanceToNow } from "date-fns";
-import { Link, generatePath, useNavigate, useParams, useSearchParams } from "react-router-dom";
+import {
+  Link,
+  generatePath,
+  useLocation,
+  useNavigate,
+  useParams,
+  useSearchParams,
+} from "react-router-dom";
 import {
   Alert,
   Box,
@@ -33,17 +39,26 @@ import {
   Stack,
   Typography,
 } from "@wso2/oxygen-ui";
-import { PageLayout, DescriptionCard, PageMetaItem } from "@agent-management-platform/views";
-import { absoluteRouteMap } from "@agent-management-platform/types";
-import { LabelChips, SwaggerSpecViewer, parseOpenApiSpecContent } from "@agent-management-platform/shared-component";
+import {
+  PageLayout,
+  DescriptionCard,
+  PageMetaItem,
+  returnToState,
+} from "@agent-management-platform/views";
+import { absoluteRouteMap, withBasePath } from "@agent-management-platform/types";
+import { formatRelativeTime, LabelChips, parseOpenApiSpecContent, SwaggerSpecViewer } from "@agent-management-platform/shared-component";
 import { useGetAgentKind, useGetBuild, useListKindAgents, useListProjects, useGetAgentKindVersion } from "@agent-management-platform/api-client";
-import { SectionCard } from "./SectionCard";
+import { useFeatureAccess } from "@agent-management-platform/feature-management";
+import { SectionCard } from "./subComponents/SectionCard";
 import { Clock, ExternalLink, BookOpenText, Plus, Tag } from "@wso2/oxygen-ui-icons-react";
 
 const KIND_AVATAR = { children: <BookOpenText size={32} />, color: "primary.main" };
 
 export const CatalogKindDetails: React.FC = () => {
   const navigate = useNavigate();
+  // Add Instance creates an agent, so it follows agent write access.
+  const canCreateAgent = useFeatureAccess("agent_create");
+  const location = useLocation();
   const { kindId, orgId } = useParams<{ kindId: string; orgId: string }>();
 
   const { data: kind, isLoading } = useGetAgentKind({ orgName: orgId, kindName: kindId ?? "" });
@@ -124,7 +139,7 @@ export const CatalogKindDetails: React.FC = () => {
     const target = selectedVersionTag ?
       `${targetPath}?version=${encodeURIComponent(selectedVersionTag)}` : targetPath;
     handleCloseAddInstanceMenu();
-    navigate(target);
+    navigate(target, { state: returnToState(location) });
   };
 
   const versionSelector = sortedVersions.length > 1 && (
@@ -152,7 +167,7 @@ export const CatalogKindDetails: React.FC = () => {
   if (isLoading) {
     return (
       <PageLayout title={kindId ?? "Agent Kind Details"} backHref={backHref}
-        backLabel="Back to Agent Catalog" variant="card" avatar={KIND_AVATAR}>
+        backLabel="Back to agent catalog" avatar={KIND_AVATAR}>
         <Box sx={{ p: 2 }}>
           <Skeleton variant="rounded" height={32} sx={{ mb: 2, maxWidth: 320 }} />
           <Skeleton variant="rounded" height={48} sx={{ mb: 1 }} />
@@ -166,7 +181,7 @@ export const CatalogKindDetails: React.FC = () => {
   if (!kind) {
     return (
       <PageLayout title="Agent Kind Details" backHref={backHref}
-        backLabel="Back to Agent Catalog" variant="card" avatar={KIND_AVATAR}>
+        backLabel="Back to agent catalog" avatar={KIND_AVATAR}>
         <Alert severity="error">Agent kind &quot;{kindId}&quot; was not found.</Alert>
       </PageLayout>
     );
@@ -181,8 +196,7 @@ export const CatalogKindDetails: React.FC = () => {
     <PageLayout
       title={kind.displayName}
       backHref={backHref}
-      backLabel="Back to Agent Catalog"
-      variant="card"
+      backLabel="Back to agent catalog"
       avatar={KIND_AVATAR}
       meta={
         <>
@@ -215,9 +229,10 @@ export const CatalogKindDetails: React.FC = () => {
             target="_blank"
             rel="noopener noreferrer"
           >
-            View Source Agent
+            View source agent
           </Button>
         ),
+        canCreateAgent && (
         <React.Fragment key="add-instance-action">
           <Button
             startIcon={<Plus />}
@@ -228,7 +243,7 @@ export const CatalogKindDetails: React.FC = () => {
             aria-haspopup="true"
             aria-expanded={Boolean(addInstanceAnchorEl)}
           >
-            Add Instance
+            Add instance
           </Button>
           <Menu
             id="add-instance-menu"
@@ -251,7 +266,8 @@ export const CatalogKindDetails: React.FC = () => {
               <MenuItem disabled>No projects found</MenuItem>
             )}
           </Menu>
-        </React.Fragment>,
+        </React.Fragment>
+        ),
       ]}
     >
       <Stack spacing={3}>
@@ -328,10 +344,11 @@ export const CatalogKindDetails: React.FC = () => {
                 </ListingTable.Head>
                 <ListingTable.Body>
                   {kindAgents.map((agent) => {
-                    const agentHref = generatePath(
+                    // Opened in a new tab via window.open, which bypasses the router basename.
+                    const agentHref = withBasePath(generatePath(
                       absoluteRouteMap.children.org.children.projects.children.agents.path,
                       { orgId: orgId ?? "", projectId: agent.projectName, agentId: agent.name },
-                    );
+                    ));
                     return (
                       <ListingTable.Row
                         key={`${agent.projectName}/${agent.name}`}
@@ -351,7 +368,7 @@ export const CatalogKindDetails: React.FC = () => {
                         <ListingTable.Cell>
                           {agent.createdAt ? (
                             <Typography variant="body2" color="text.secondary">
-                              {formatDistanceToNow(new Date(agent.createdAt), { addSuffix: true })}
+                              {formatRelativeTime(agent.createdAt)}
                             </Typography>
                           ) : (
                             <Typography variant="body2" color="text.secondary">—</Typography>
@@ -364,7 +381,7 @@ export const CatalogKindDetails: React.FC = () => {
                             endIcon={<ExternalLink size={16} />}
                             onClick={(e) => { e.stopPropagation(); window.open(agentHref, "_blank", "noopener,noreferrer"); }}
                           >
-                            View Agent
+                            View agent
                           </Button>
                         </ListingTable.Cell>
                       </ListingTable.Row>

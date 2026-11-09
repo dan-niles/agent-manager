@@ -21,7 +21,6 @@ import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@agent-management-platform/api-client", () => ({
-  isAgentCardNotFound: (error: unknown) => (error as { status?: number } | null)?.status === 404,
   useGetAgent: vi.fn(),
   useGetAgentCard: vi.fn(),
 }));
@@ -41,7 +40,8 @@ const mockCard = (value: Partial<ReturnType<typeof useGetAgentCard>>) =>
     data: undefined, isLoading: false, isError: false, error: null, ...value,
   } as unknown as ReturnType<typeof useGetAgentCard>);
 
-const notFound = { isError: true as const, error: Object.assign(new Error("nf"), { status: 404 }) };
+// The hook reads a 404 (no card source) as null.
+const notFound = { data: null };
 
 const renderSummary = (external = false) =>
   render(
@@ -52,8 +52,14 @@ const renderSummary = (external = false) =>
 
 beforeEach(() => {
   vi.clearAllMocks();
+  localStorage.clear();
   mockAgent("a2a-agent");
 });
+
+const mockExternalAgent = () =>
+  vi.mocked(useGetAgent).mockReturnValue({
+    data: { agentType: { type: "external-agent-api" }, provisioning: { type: "external" } },
+  } as unknown as ReturnType<typeof useGetAgent>);
 
 describe("EnvAgentCardSummary", () => {
   it("renders nothing for a non-A2A agent", () => {
@@ -61,6 +67,45 @@ describe("EnvAgentCardSummary", () => {
     mockCard({});
     const { container } = renderSummary();
     expect(container).toBeEmptyDOMElement();
+  });
+
+  it("offers to register a card URL on an external agent created without a subtype", () => {
+    mockExternalAgent();
+    mockCard(notFound);
+    renderSummary(true);
+    expect(screen.getByRole("link", { name: /Register agent card URL/ })).toHaveAttribute("href", CONFIGURE_HREF);
+  });
+
+  it("offers the card URL prompt on the first visit only", () => {
+    mockExternalAgent();
+    mockCard(notFound);
+    renderSummary(true).unmount();
+    const { container } = renderSummary(true);
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  it("offers the prompt to another agent shown in the same mounted card", () => {
+    mockExternalAgent();
+    mockCard(notFound);
+    const summary = (agentId: string) => (
+      <MemoryRouter>
+        <EnvAgentCardSummary orgId="org" projectId="proj" agentId={agentId} envId="dev" external />
+      </MemoryRouter>
+    );
+    renderSummary(true).unmount();
+    const { container, rerender } = render(summary("agent"));
+    expect(container).toBeEmptyDOMElement();
+    rerender(summary("other"));
+    expect(screen.getByRole("link", { name: /Register agent card URL/ })).toBeInTheDocument();
+  });
+
+  it("keeps showing a registered card after the prompt was dismissed", () => {
+    mockExternalAgent();
+    mockCard(notFound);
+    renderSummary(true).unmount();
+    mockCard({ data: { card: { provider: { organization: "Acme" } } } as never });
+    renderSummary(true);
+    expect(screen.getByText("Agent Card")).toBeInTheDocument();
   });
 
   it("shows only the provider, interfaces and skill names of a fetched card", () => {
@@ -121,18 +166,5 @@ describe("EnvAgentCardSummary", () => {
     expect(screen.getByText(/not available yet/i)).toBeInTheDocument();
     expect(screen.queryByText(/HTTP 404/)).not.toBeInTheDocument();
     expect(screen.queryByText(/register agent card url/i)).not.toBeInTheDocument();
-  });
-
-  it("drops the stale card once its source is gone", () => {
-    mockCard({
-      ...notFound,
-      data: {
-        source: "external", status: "fetched", sourceUrl: "https://old.example/card.json", lastError: "",
-        card: { provider: { organization: "Old Co" }, skills: [{ name: "old" }] },
-      },
-    });
-    renderSummary(true);
-    expect(screen.queryByText("Old Co")).not.toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /register agent card url/i })).toBeInTheDocument();
   });
 });

@@ -21,7 +21,12 @@ import {
   useListMCPProxyScopes,
   useUpdateMCPProxyScope,
 } from "@agent-management-platform/api-client";
-import { useConfirmationDialog } from "@agent-management-platform/shared-component";
+import {
+  computeScopeToolUpdates,
+  type ScopeToolUpdate,
+  useConfirmationDialog,
+} from "@agent-management-platform/shared-component";
+import { TextInput } from "@agent-management-platform/views";
 import {
   type APIKeyLocation,
   type Environment,
@@ -36,13 +41,10 @@ import {
   Button,
   Chip,
   Collapse,
-  FormControl,
-  FormLabel,
   Grid,
   IconButton,
   ListingTable,
   MenuItem,
-  Select,
   Skeleton,
   Stack,
   Tab,
@@ -59,6 +61,7 @@ import {
   isToolBlockedByAcl,
   resolveAuthenticationType,
 } from "./mcpEndpoints";
+import { useResourceAccess } from "@agent-management-platform/feature-management";
 import { CreateScopeDrawer } from "./CreateScopeDrawer";
 
 const KEY_LOCATION_OPTIONS: { value: APIKeyLocation; label: string }[] = [
@@ -80,9 +83,6 @@ type ToolScopeRow = {
   tool: string;
   scopes: MCPProxyScopeResponse[];
 };
-
-// One scope's replacement tool list, as sent by Save.
-type ScopeToolUpdate = { action: string; tools: string[] };
 
 // Builds one row per discovered tool, seeded with whichever scopes reference it.
 // `appliedUpdates` overrides a scope's tool list, so a Save that committed only
@@ -118,37 +118,8 @@ const serializeToolScopeRows = (rows: ToolScopeRow[]) =>
     })),
   );
 
-// Diffs the desired (action -> tools) mapping built from the current rows
-// against the last-fetched scope list, producing only the tool-list updates
-// needed to bring the server in sync. Scopes themselves are created via the
-// Create Scope panel and deleted explicitly from the scopes list below — a
-// scope ending up with zero tools here is still a valid, saved state, not a
-// signal to delete it, and the server accepts the empty list (see
-// validateScopeTools in mcp_proxy_scope_service.go).
-function computeScopeToolUpdates(
-  rows: ToolScopeRow[],
-  catalogScopes: MCPProxyScopeResponse[],
-): ScopeToolUpdate[] {
-  const desired = new Map<string, Set<string>>(
-    catalogScopes.map((s) => [s.action, new Set<string>()]),
-  );
-  for (const row of rows) {
-    for (const scope of row.scopes) {
-      desired.get(scope.action)?.add(row.tool);
-    }
-  }
-  const setsEqual = (a: Set<string>, b: Set<string>) =>
-    a.size === b.size && [...a].every((v) => b.has(v));
-
-  const updates: ScopeToolUpdate[] = [];
-  for (const scope of catalogScopes) {
-    const desiredTools = desired.get(scope.action) ?? new Set<string>();
-    if (!setsEqual(desiredTools, new Set(scope.tools))) {
-      updates.push({ action: scope.action, tools: [...desiredTools] });
-    }
-  }
-  return updates;
-}
+// Stable default so the Save callback is not rebuilt on every render.
+const NO_TOOLS: readonly string[] = [];
 
 export type MCPProxySecurityTabProps = {
   config: MCPEndpointConfig | undefined;
@@ -160,6 +131,13 @@ export type MCPProxySecurityTabProps = {
    * panel's role picker.
    */
   environments: Environment[];
+  /**
+   * Tool names of the proxy's other endpoints. A scope covers the tools of every endpoint but this
+   * table lists only the selected endpoint's, so Save keeps these tools on the scopes it updates.
+   */
+  otherEndpointTools?: readonly string[];
+  /** OAuth (Agent Identity) is unavailable while the endpoint is on a self-hosted gateway. */
+  isOnSelfHostedGateway?: boolean;
   isLoading?: boolean;
   onUpdate: (fields: Partial<MCPEndpointConfig>) => Promise<MCPProxy>;
   isUpdating: boolean;
@@ -173,11 +151,14 @@ export function MCPProxySecurityTab({
   orgName,
   proxyId,
   environments,
+  otherEndpointTools = NO_TOOLS,
+  isOnSelfHostedGateway = false,
   isLoading = false,
   onUpdate,
   isUpdating,
   onDirtyChange,
 }: MCPProxySecurityTabProps) {
+  const { canWrite } = useResourceAccess("mcp_server");
   const [authenticationType, setAuthenticationType] =
     useState<AuthenticationType>("apiKey");
   const [keyValue, setKeyValue] = useState("");
@@ -311,16 +292,17 @@ export function MCPProxySecurityTab({
   }, [selectedEndpointId]);
 
   // Reseed when the scope list refetches (e.g. right after Save invalidates
-  // the query), but only while there are no unsaved edits — otherwise this
-  // would clobber in-progress changes on a stray background refetch. Doesn't
-  // depend on selectedEndpointId — the effect above already handles tab
-  // switches, and scopes are proxy-level so switching tabs alone never
-  // changes catalogScopes.
+  // the query) or the endpoint's tool list changes (e.g. discovered after the
+  // endpoint was selected), but only while there are no unsaved edits —
+  // otherwise this would clobber in-progress changes on a stray background
+  // refetch. Doesn't depend on selectedEndpointId — the effect above already
+  // handles tab switches, and scopes are proxy-level so switching tabs alone
+  // never changes catalogScopes.
   useEffect(() => {
     if (!selectedEndpointId || toolScopesDirty) return;
     resetToolScopeRows(derivedToolScopeRows);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- guard, not a trigger dep
-  }, [catalogScopes]);
+  }, [catalogScopes, toolEntries]);
 
   const setRowScopes = useCallback((tool: string, scopes: MCPProxyScopeResponse[]) => {
     setToolScopeRows((prev) =>
@@ -347,7 +329,7 @@ export function MCPProxySecurityTab({
           analytics: { entity: "mcp-proxy", action: "switch-auth-method" },
           title: "Switch authentication method?",
           description: `This proxy is currently secured with ${getAuthenticationTypeLabel(savedType)}. Switching to ${getAuthenticationTypeLabel(nextType)} will break any agent already configured to use it, until their tool configuration is updated to match.`,
-          confirmButtonText: "Switch Method",
+          confirmButtonText: "Switch method",
           confirmButtonColor: "error",
           onConfirm: () => setAuthenticationType(nextType),
         });
@@ -438,7 +420,7 @@ export function MCPProxySecurityTab({
       // saved via their own REST calls rather than bundled into the security
       // payload above.
       if (authenticationType === "identity" && toolScopesDirty && orgName && proxyId) {
-        const updates = computeScopeToolUpdates(toolScopeRows, catalogScopes);
+        const updates = computeScopeToolUpdates(toolScopeRows, catalogScopes, otherEndpointTools);
 
         // Sequential rather than Promise.all: a rejection must not leave the
         // remaining updates in flight, and the committed prefix has to be
@@ -484,6 +466,7 @@ export function MCPProxySecurityTab({
     toolScopesDirty,
     catalogScopes,
     toolEntries,
+    otherEndpointTools,
     orgName,
     proxyId,
     onUpdate,
@@ -523,7 +506,7 @@ export function MCPProxySecurityTab({
     [orgName, proxyId, addConfirmation, deleteMCPProxyScope, resetToolScopeRows],
   );
 
-  const isDisabled = isLoading || !config;
+  const isDisabled = isLoading || !config || !canWrite;
   const hasNoDiscoveredTools = !isLoading && !!config && toolEntries.length === 0;
 
   if (isLoading) {
@@ -550,25 +533,33 @@ export function MCPProxySecurityTab({
     <Stack spacing={2}>
       <Typography variant="h6">Authentication</Typography>
 
-      <Grid container spacing={3}>
-        <Grid size={{ xs: 12, md: 5 }}>
-          <FormControl fullWidth disabled={isDisabled}>
-            <FormLabel>Method</FormLabel>
-            <Select
-              size="small"
-              displayEmpty
-              value={authenticationType || ""}
-              onChange={(e) =>
-                handleAuthTypeChange((e.target.value as AuthenticationType) || "")
-              }
-            >
-              {AUTHENTICATION_TYPE_OPTIONS.map((type) => (
-                <MenuItem key={type || "none"} value={type}>
-                  {getAuthenticationTypeLabel(type)}
-                </MenuItem>
-              ))}
-            </Select>
-          </FormControl>
+      <Grid container spacing={2}>
+        <Grid size={{ xs: 12, md: 6, xl: 4 }}>
+          <TextInput
+            select
+            label="Method"
+            disabled={isDisabled}
+            helperText={
+              isOnSelfHostedGateway
+                ? "OAuth isn't available on self-hosted gateways yet. Use API key security."
+                : undefined
+            }
+            size="small"
+            value={authenticationType || ""}
+            onChange={(e) =>
+              handleAuthTypeChange((e.target.value as AuthenticationType) || "")
+            }
+          >
+            {AUTHENTICATION_TYPE_OPTIONS.map((type) => (
+              <MenuItem
+                key={type || "none"}
+                value={type}
+                disabled={type === "identity" && isOnSelfHostedGateway}
+              >
+                {getAuthenticationTypeLabel(type)}
+              </MenuItem>
+            ))}
+          </TextInput>
         </Grid>
       </Grid>
 
@@ -583,6 +574,7 @@ export function MCPProxySecurityTab({
             </Typography>
           </Stack>
 
+          {canWrite && (
           <Stack direction="row" alignItems="center" justifyContent="flex-end">
             <Button
               variant="outlined"
@@ -590,9 +582,10 @@ export function MCPProxySecurityTab({
               startIcon={<Plus size={16} />}
               onClick={() => setCreateScopeDrawerOpen(true)}
             >
-              Create Scope
+              Create scope
             </Button>
           </Stack>
+          )}
 
           <Tabs
             value={authorizationTab}
@@ -686,7 +679,7 @@ export function MCPProxySecurityTab({
                 <ListingTable.EmptyState
                   illustration={<ShieldX size={64} />}
                   title="No scopes yet"
-                  description='Click "Create Scope" to add one.'
+                  description={canWrite ? 'Click "Create Scope" to add one.' : undefined}
                 />
               </ListingTable.Container>
             ) : (
@@ -709,6 +702,7 @@ export function MCPProxySecurityTab({
                         </ListingTable.Cell>
                         <ListingTable.Cell>{scope.description || "-"}</ListingTable.Cell>
                         <ListingTable.Cell align="center">
+                          {canWrite && (
                           <Tooltip title="Delete scope">
                             <IconButton
                               size="small"
@@ -718,6 +712,7 @@ export function MCPProxySecurityTab({
                               <Trash size={16} />
                             </IconButton>
                           </Tooltip>
+                          )}
                         </ListingTable.Cell>
                       </ListingTable.Row>
                     ))}
@@ -729,49 +724,43 @@ export function MCPProxySecurityTab({
       )}
 
       {authenticationType === "apiKey" && (
-        <Grid container spacing={3}>
-          <Grid size={{ xs: 12, md: 5 }}>
-            <FormControl fullWidth disabled={isDisabled}>
-              <FormLabel>Key Location</FormLabel>
-              <Select
+        <Grid container spacing={2}>
+          <Grid size={{ xs: 12, md: 6, xl: 4 }}>
+            <TextInput
+              select
+              label="Key Location"
+              disabled={isDisabled}
                 size="small"
                 value={keyIn}
                 onChange={(e) => setKeyIn(e.target.value as APIKeyLocation)}
-              >
+            >
                 {KEY_LOCATION_OPTIONS.map((opt) => (
                   <MenuItem key={opt.value} value={opt.value}>
                     {opt.label}
                   </MenuItem>
                 ))}
-              </Select>
-            </FormControl>
+            </TextInput>
           </Grid>
-          <Grid size={{ xs: 12, md: 5 }}>
-            <FormControl
-              fullWidth
+          <Grid size={{ xs: 12, md: 6, xl: 4 }}>
+            <TextInput
+              label={keyIn === "query" ? "Query Param Key" : "Header Key"}
+              maxLength={INPUT_LIMITS.KEY}
+              hideCharacterCount={(keyValue?.length ?? 0) < INPUT_LIMITS.KEY}
               disabled={isDisabled}
+              size="small"
+              value={keyValue}
+              onChange={(e) => {
+                setKeyValue(e.target.value);
+                if (fieldErrors.keyValue) setFieldErrors({});
+              }}
               error={!!fieldErrors.keyValue}
-            >
-              <FormLabel>
-                {keyIn === "query" ? "Query Param Key" : "Header Key"}
-              </FormLabel>
-              <TextField
-                slotProps={{ htmlInput: { maxLength: INPUT_LIMITS.KEY } }}
-                size="small"
-                value={keyValue}
-                onChange={(e) => {
-                  setKeyValue(e.target.value);
-                  if (fieldErrors.keyValue) setFieldErrors({});
-                }}
-                error={!!fieldErrors.keyValue}
-                helperText={fieldErrors.keyValue}
-                sx={{
-                  "& .MuiInputBase-input": {
-                    fontFamily: "monospace",
-                  },
-                }}
-              />
-            </FormControl>
+              helperText={fieldErrors.keyValue}
+              sx={{
+                "& .MuiInputBase-input": {
+                  fontFamily: "monospace",
+                },
+              }}
+            />
           </Grid>
         </Grid>
       )}
@@ -793,6 +782,7 @@ export function MCPProxySecurityTab({
       {/* Sticky so Save stays reachable — confirming an auth-method switch
           only updates the form, and a Save scrolled out of view left users
           navigating away thinking the change had applied. */}
+      {canWrite && (
       <Stack
         direction="row"
         spacing={1.5}
@@ -833,8 +823,9 @@ export function MCPProxySecurityTab({
           {saveInProgress ? "Saving..." : "Save"}
         </Button>
       </Stack>
+      )}
 
-      {orgName && proxyId && (
+      {canWrite && orgName && proxyId && (
         <CreateScopeDrawer
           open={createScopeDrawerOpen}
           onClose={() => setCreateScopeDrawerOpen(false)}

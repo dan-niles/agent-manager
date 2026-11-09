@@ -179,7 +179,9 @@ var sensitiveReadPaths = map[string]bool{
 	"/orgs/{orgName}/projects/{projName}/agents/{agentName}/environments/{envID}/api-keys":                            true,
 	"/orgs/{orgName}/projects/{projName}/agents/{agentName}/mcp-configs/{configId}/environments/{envName}/api-keys":   true,
 	"/orgs/{orgName}/projects/{projName}/agents/{agentName}/model-configs/{configId}/environments/{envName}/api-keys": true,
+	"/orgs/{orgName}/projects/{projName}/mcp-proxies/{proxyId}/environments/{envName}/api-keys":                       true,
 	"/orgs/{orgName}/gateways/{gatewayID}/tokens":                                                                     true,
+	"/orgs/{orgName}/self-hosted-gateways/{gatewayID}/tokens":                                                         true,
 	"/orgs/{orgName}/projects/{projName}/agents/{agentName}/identities":                                               true,
 
 	// Internal surface: the gateway bulk-sync endpoints hand real key material
@@ -228,6 +230,27 @@ var sensitiveReadPaths = map[string]bool{
 // Keys are matched against the path with the method prefix stripped, so the
 // same path under different methods maps through methodActionOverrides first.
 var actionOverrides = map[string]Action{
+	// Event destinations and subscriptions are gated by the permission of
+	// the scope they belong to (events, project or agent), which says nothing
+	// about the operation.
+	"POST /orgs/{orgName}/events/destinations":                                                            "event-destination:create",
+	"PUT /orgs/{orgName}/events/destinations/{destinationId}":                                             "event-destination:update",
+	"DELETE /orgs/{orgName}/events/destinations/{destinationId}":                                          "event-destination:delete",
+	"POST /orgs/{orgName}/events/destinations/{destinationId}/rotate-secret":                              "event-destination:rotate-secret",
+	"POST /orgs/{orgName}/events/destinations/{destinationId}/test":                                       "event-destination:test",
+	"POST /orgs/{orgName}/events/subscriptions":                                                           "event-subscription:create",
+	"PUT /orgs/{orgName}/events/subscriptions/{subscriptionId}":                                           "event-subscription:update",
+	"DELETE /orgs/{orgName}/events/subscriptions/{subscriptionId}":                                        "event-subscription:delete",
+	"POST /orgs/{orgName}/projects/{projName}/events/subscriptions":                                       "event-subscription:create",
+	"PUT /orgs/{orgName}/projects/{projName}/events/subscriptions/{subscriptionId}":                       "event-subscription:update",
+	"DELETE /orgs/{orgName}/projects/{projName}/events/subscriptions/{subscriptionId}":                    "event-subscription:delete",
+	"POST /orgs/{orgName}/projects/{projName}/agents/{agentName}/events/subscriptions":                    "event-subscription:create",
+	"PUT /orgs/{orgName}/projects/{projName}/agents/{agentName}/events/subscriptions/{subscriptionId}":    "event-subscription:update",
+	"DELETE /orgs/{orgName}/projects/{projName}/agents/{agentName}/events/subscriptions/{subscriptionId}": "event-subscription:delete",
+	// Monitor alert settings are shared and require monitor update permission.
+	"PUT /orgs/{orgName}/projects/{projName}/agents/{agentName}/monitors/{monitorName}/alerting":    "monitor-alert:update",
+	"DELETE /orgs/{orgName}/projects/{projName}/agents/{agentName}/monitors/{monitorName}/alerting": "monitor-alert:delete",
+
 	// Gating permission names a different resource than the effect.
 	"POST /orgs/{orgName}/projects/{projName}/agents/{agentName}/publish-kind": "agent-kind:publish",
 
@@ -279,13 +302,21 @@ var actionOverrides = map[string]Action{
 	"PUT /orgs/{orgName}/projects/{projName}/agents/{agentName}/mcp-configs/{configId}/environments/{envName}/api-keys/{keyName}":      "api-key:rotate",
 	"DELETE /orgs/{orgName}/projects/{projName}/agents/{agentName}/mcp-configs/{configId}/environments/{envName}/api-keys/{keyName}":   "api-key:revoke",
 
+	// One permission, several operations — project MCP proxy binding API keys.
+	"POST /orgs/{orgName}/projects/{projName}/mcp-proxies/{proxyId}/environments/{envName}/api-keys":             "api-key:create",
+	"POST /orgs/{orgName}/projects/{projName}/mcp-proxies/{proxyId}/environments/{envName}/api-keys/test":        "api-key:issue-test",
+	"PUT /orgs/{orgName}/projects/{projName}/mcp-proxies/{proxyId}/environments/{envName}/api-keys/{keyName}":    "api-key:rotate",
+	"DELETE /orgs/{orgName}/projects/{projName}/mcp-proxies/{proxyId}/environments/{envName}/api-keys/{keyName}": "api-key:revoke",
+
 	// One permission, several operations — gateway tokens and configuration.
-	"POST /orgs/{orgName}/gateways/{gatewayID}/tokens":                      "gateway-token:rotate",
-	"DELETE /orgs/{orgName}/gateways/{gatewayID}/tokens/{tokenID}":          "gateway-token:revoke",
-	"POST /orgs/{orgName}/gateways/{gatewayID}/environments/{envID}":        "gateway:assign-environment",
-	"DELETE /orgs/{orgName}/gateways/{gatewayID}/environments/{envID}":      "gateway:unassign-environment",
-	"PUT /orgs/{orgName}/gateways/{gatewayID}/identity-providers/{name}":    "gateway:set-identity-provider",
-	"DELETE /orgs/{orgName}/gateways/{gatewayID}/identity-providers/{name}": "gateway:remove-identity-provider",
+	"POST /orgs/{orgName}/gateways/{gatewayID}/tokens":                         "gateway-token:rotate",
+	"DELETE /orgs/{orgName}/gateways/{gatewayID}/tokens/{tokenID}":             "gateway-token:revoke",
+	"POST /orgs/{orgName}/self-hosted-gateways/{gatewayID}/tokens":             "gateway-token:rotate",
+	"DELETE /orgs/{orgName}/self-hosted-gateways/{gatewayID}/tokens/{tokenID}": "gateway-token:revoke",
+	"POST /orgs/{orgName}/gateways/{gatewayID}/environments/{envID}":           "gateway:assign-environment",
+	"DELETE /orgs/{orgName}/gateways/{gatewayID}/environments/{envID}":         "gateway:unassign-environment",
+	"PUT /orgs/{orgName}/gateways/{gatewayID}/identity-providers/{name}":       "gateway:set-identity-provider",
+	"DELETE /orgs/{orgName}/gateways/{gatewayID}/identity-providers/{name}":    "gateway:remove-identity-provider",
 
 	// The privilege-escalation path. All four are gated by role:update, and
 	// telling them apart is the whole point of an audit trail.
@@ -339,11 +370,19 @@ var actionOverrides = map[string]Action{
 	"GET /llm-providers/api-keys":         "api-key:sync",
 	"GET /llm-proxies/api-keys":           "api-key:sync",
 	"GET /apis/api-keys":                  "api-key:sync",
+	// The gateway's startup sync. Reads expressed as POST because the ids go in
+	// the body; the batch carries the same resolved secrets as the per-artifact
+	// pulls.
+	"POST /deployments/fetch-batch": "deployment:sync",
+	"POST /artifacts/exists":        "artifact:check-exists",
 
 	// Reads expressed as POST because they carry a request body.
 	// The score-publish route carries no rbac.Permission at all — it is gated
 	// only by an audience check — so there is nothing to derive from.
 	"POST /publisher/monitors/{monitorId}/runs/{runId}/scores": "monitor-score:publish",
+	// Likewise the build publisher route: a build token (issued to IDP_CLIENT_ID
+	// for one organization) is its only gate, so the action is named here.
+	"POST /build-publisher/builds/{buildName}/workload": "build-workload:publish",
 
 	"POST /orgs/{orgName}/repositories/branches":         "repository:list-branches",
 	"POST /orgs/{orgName}/repositories/commits":          "repository:list-commits",
@@ -356,7 +395,9 @@ var actionOverrides = map[string]Action{
 	"GET /orgs/{orgName}/projects/{projName}/agents/{agentName}/environments/{envID}/api-keys":                            "api-key:list",
 	"GET /orgs/{orgName}/projects/{projName}/agents/{agentName}/mcp-configs/{configId}/environments/{envName}/api-keys":   "api-key:list",
 	"GET /orgs/{orgName}/projects/{projName}/agents/{agentName}/model-configs/{configId}/environments/{envName}/api-keys": "api-key:list",
+	"GET /orgs/{orgName}/projects/{projName}/mcp-proxies/{proxyId}/environments/{envName}/api-keys":                       "api-key:list",
 	"GET /orgs/{orgName}/gateways/{gatewayID}/tokens":                                                                     "gateway-token:list",
+	"GET /orgs/{orgName}/self-hosted-gateways/{gatewayID}/tokens":                                                         "gateway-token:list",
 	"GET /orgs/{orgName}/projects/{projName}/agents/{agentName}/identities":                                               "agent-identity:read",
 	"GET /orgs/{orgName}/identities/permissions":                                                                          "permission:list",
 	"GET /orgs/{orgName}/identities/roles/{roleID}/assignments":                                                           "role:list-assignments",

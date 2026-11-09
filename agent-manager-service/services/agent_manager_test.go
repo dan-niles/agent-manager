@@ -31,6 +31,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 
 	"github.com/wso2/agent-manager/agent-manager-service/clients/clientmocks"
 	"github.com/wso2/agent-manager/agent-manager-service/clients/openchoreosvc/client"
@@ -80,13 +81,6 @@ func (s *stubAgentThunderProvisioning) GetAgentGroups(ctx context.Context, orgNa
 
 func (s *stubAgentThunderProvisioning) GetIdentityViews(ctx context.Context, ouID, projectName, agentName string) ([]models.AgentIdentityEnvironmentView, error) {
 	return s.GetIdentityViewsFunc(ctx, ouID, projectName, agentName)
-}
-
-// HealSecretRef is a no-op override: no test using this stub exercises the
-// reconciler's startup heal pass, but leaving it unimplemented would panic on
-// the nil embedded interface if that ever changes.
-func (s *stubAgentThunderProvisioning) HealSecretRef(ctx context.Context, binding models.AgentThunderClient) error {
-	return nil
 }
 
 func (s *stubAgentThunderProvisioning) ProvisionForEnvironmentIfMissing(ctx context.Context, ouID, projectName, agentName, envName string, ownership models.AgentProvisioningType, requestedBy string) (bool, error) {
@@ -559,6 +553,11 @@ func TestDeployAgent_IdentityInjectionError_AbortsDeploy(t *testing.T) {
 	boom := errors.New("secret backend unavailable")
 	deployCalled := false
 	ocClient := &clientmocks.OpenChoreoClientMock{
+		// The deploy/promote pre-flight reads the component's reconcile conditions;
+		// an unblocked component keeps this test on the path it actually covers.
+		GetComponentReconcileBlockFunc: func(_ context.Context, _, _ string) (*client.ComponentReconcileBlock, error) {
+			return nil, nil //nolint:nilnil // documented contract: a nil block means "not blocked"
+		},
 		GetEnvironmentFunc: nonProductionEnvStub(),
 		GetOrganizationFunc: func(_ context.Context, name string) (*models.OrganizationResponse, error) {
 			return &models.OrganizationResponse{Name: name}, nil
@@ -574,6 +573,7 @@ func TestDeployAgent_IdentityInjectionError_AbortsDeploy(t *testing.T) {
 		GetComponentConfigurationsFunc: func(context.Context, string, string, string, string) ([]models.EnvVars, error) {
 			return nil, nil
 		},
+		ListBuildsFunc:                  buildsProducing("registry.example.com/my-agent:v1"),
 		EnsureProjectReleaseBindingFunc: func(_ context.Context, _, _, _ string) error { return nil },
 		DeployFunc: func(context.Context, string, string, string, client.DeployRequest) error {
 			deployCalled = true
@@ -627,7 +627,7 @@ func TestUpdateAgentConfigurations_IdentityInjectionError_AbortsUpdate(t *testin
 	s := &agentManagerService{ocClient: ocClient, agentIdentityInjection: injector, logger: discardLogger()}
 
 	err := s.UpdateAgentConfigurations(tierGrantedCtx(t), "acme", "proj1", "my-agent",
-		&spec.UpdateAgentConfigurationsRequest{EnvironmentName: "dev"})
+		&spec.UpdateAgentConfigurationsRequest{EnvironmentName: "dev", Env: []spec.EnvironmentVariable{}})
 
 	require.Error(t, err, "a failure building AgentID env vars must abort the update, not proceed without credentials")
 	assert.False(t, overridesReplaced, "the env var override rewrite must never happen once identity env vars failed to build")
@@ -688,6 +688,33 @@ func TestUpdateAgentConfigurations_RejectsUnownedSecretRef(t *testing.T) {
 	assert.False(t, overridesReplaced, "the victim's secretRef must never reach the workload override rewrite for an unrelated agent")
 }
 
+// A system-managed secret env var echoed back with its secretRef must keep the secret
+// property it was issued under. MCP and LLM proxy secrets store the key under "api-key";
+// re-emitting it under the env var's own name points the binding at a property that does
+// not exist and fails rendering (wso2/agent-manager#2164).
+func TestProcessEnvVars_PreservesSystemManagedSecretKey(t *testing.T) {
+	const proxySecretRef = "github-default-github-proxy-secrets"
+
+	ocClient := &clientmocks.OpenChoreoClientMock{
+		GetComponentConfigurationsFunc: func(context.Context, string, string, string, string) ([]models.EnvVars, error) {
+			return []models.EnvVars{{Key: "GITHUB_API_KEY", IsSensitive: true, SecretRef: proxySecretRef, SecretKey: "api-key"}}, nil
+		},
+	}
+	s := &agentManagerService{ocClient: ocClient, logger: discardLogger()}
+
+	echoed := spec.EnvironmentVariable{Key: "GITHUB_API_KEY"}
+	echoed.SetIsSensitive(true)
+	echoed.SetValue("")
+	echoed.SetSecretRef(proxySecretRef)
+
+	written, err := s.processEnvVars(context.Background(), "acme", "proj1", "stage", "it-support",
+		[]spec.EnvironmentVariable{echoed}, nil)
+	require.NoError(t, err)
+	require.Len(t, written, 1)
+	require.NotNil(t, written[0].ValueFrom)
+	assert.Equal(t, client.SecretKeyRef{Name: proxySecretRef, Key: "api-key"}, *written[0].ValueFrom.SecretKeyRef)
+}
+
 // stubAgentConfigurationServiceForPromote implements AgentConfigurationService
 // by embedding the (nil) interface and overriding only the methods PromoteAgent
 // actually calls — any other method call panics on the nil embed, which is fine
@@ -698,6 +725,7 @@ type stubAgentConfigurationServiceForPromote struct {
 	SystemVarsFunc     func(ctx context.Context, agentID, ouID, projectName, environmentName string) ([]client.EnvVar, error)
 	SystemConfigsFunc  func(ctx context.Context, agentID, ouID, projectName, environmentName string) ([]SystemManagedConfigRef, error)
 	UnresolvedMCPsFunc func(ctx context.Context, agentID, ouID, projectName, environmentName string) (map[string]struct{}, error)
+	ReconcileMCPsFunc  func(ctx context.Context, agentID, ouID, projectName, environmentName string) error
 }
 
 // Defaults to "no configuration to describe", so tests that predate the block's
@@ -724,6 +752,16 @@ func (s *stubAgentConfigurationServiceForPromote) ListUnresolvedMCPBindings(ctx 
 		return map[string]struct{}{}, nil
 	}
 	return s.UnresolvedMCPsFunc(ctx, agentID, ouID, projectName, environmentName)
+}
+
+// Defaults to a no-op backfill that changes nothing, so a target whose connections are
+// unresolved stays unresolved on the recheck and the block still fires. Tests that want
+// the self-heal path make this flip what UnresolvedMCPsFunc returns.
+func (s *stubAgentConfigurationServiceForPromote) ReconcileMCPBindingsForAgentEnvironment(ctx context.Context, agentID, ouID, projectName, environmentName string) error {
+	if s.ReconcileMCPsFunc == nil {
+		return nil
+	}
+	return s.ReconcileMCPsFunc(ctx, agentID, ouID, projectName, environmentName)
 }
 
 // shrinkPromotionIdentityPollForTest overrides the poll interval/budget
@@ -763,9 +801,15 @@ func promoteAgentTestFixture(t *testing.T, tgtIdentityEnvVars []client.EnvVar, t
 				{SourceEnvironmentRef: "dev", TargetEnvironmentRefs: []models.TargetEnvironmentRef{{Name: "staging"}}},
 			}}, nil
 		},
+		// Default: the component reconciles normally, so the promote pre-flight lets
+		// it through. Tests covering the pre-flight override this directly.
+		GetComponentReconcileBlockFunc: func(_ context.Context, _, _ string) (*client.ComponentReconcileBlock, error) {
+			return nil, nil //nolint:nilnil // documented contract: a nil block means "not blocked"
+		},
 		GetEnvironmentFunc:              nonProductionEnvStub(),
 		IsDeploymentInProgressFunc:      func(_ context.Context, _, _, _ string) (bool, error) { return false, nil },
 		EnsureProjectReleaseBindingFunc: func(_ context.Context, _, _, _ string) error { return nil },
+		GetReleaseAgentAPIKeyTraitFunc:  noAgentAPIKeyTrait,
 		PromoteComponentFunc: func(_ context.Context, _, _, _, _, _ string, _ []client.EnvVar, _ []client.FileVar, _, _ map[string]interface{}) error {
 			promoteCalled = true
 			return nil
@@ -817,6 +861,7 @@ func promoteAgentTestFixture(t *testing.T, tgtIdentityEnvVars []client.EnvVar, t
 		agentConfigurationService: agentConfigSvc,
 		agentIdentityInjection:    identityInjector,
 		agentThunderProvisioning:  provisioningStubWithProvision,
+		gatewayRepo:               gatewayRepoMapping(ingressGateway),
 		logger:                    discardLogger(),
 	}
 	return s, &promoteCalled
@@ -876,6 +921,92 @@ func TestPromoteAgent_BlocksWhenMCPConnectionUnresolvableInTarget(t *testing.T) 
 		"promotion must be refused before PromoteComponent — otherwise the agent is already running with an empty MCP URL by the time this error is returned")
 }
 
+// A connection resolves through its per-environment binding row, and that row is written
+// only by the configuration write path and the proxy-side reconcile. An environment made
+// bindable without either running has no row, so the connection reads as dead while the
+// MCP server is in fact bound to the environment — the state users escaped by detaching
+// and re-attaching the connection. Promotion must write the missing binding and proceed,
+// not refuse a target that is one idempotent backfill away from working.
+func TestPromoteAgent_BindsMissingMCPBindingInTargetThenPromotes(t *testing.T) {
+	s, promoteCalled := promoteAgentTestFixture(t, []client.EnvVar{{Key: "AMP_AGENTID_CLIENT_ID", Value: "staging-client-id"}}, nil)
+	agentConfigSvc := promoteConfigStub(t, s)
+
+	bound := false
+	agentConfigSvc.UnresolvedMCPsFunc = func(_ context.Context, _, _, _, envName string) (map[string]struct{}, error) {
+		if envName == "staging" && !bound {
+			return map[string]struct{}{"booking": {}}, nil
+		}
+		return map[string]struct{}{}, nil
+	}
+	reconciledEnv := ""
+	agentConfigSvc.ReconcileMCPsFunc = func(_ context.Context, _, _, _, envName string) error {
+		reconciledEnv = envName
+		bound = true
+		return nil
+	}
+
+	err := s.PromoteAgent(tierGrantedCtx(t), "acme", "proj1", "my-agent", &spec.PromoteAgentRequest{
+		SourceEnvironment: "dev",
+		TargetEnvironment: "staging",
+	})
+
+	require.NoError(t, err, "a target whose only problem is an unwritten binding must promote")
+	assert.Equal(t, "staging", reconciledEnv, "the backfill must target the promotion target, not the source")
+	assert.True(t, *promoteCalled)
+}
+
+// The self-heal must not become a rubber stamp. When the backfill writes nothing — the MCP
+// server genuinely does not serve the target — the recheck sees the same dead connection
+// and the promotion is still refused before the component is promoted.
+func TestPromoteAgent_StillBlocksWhenBackfillCannotBindTarget(t *testing.T) {
+	s, promoteCalled := promoteAgentTestFixture(t, []client.EnvVar{{Key: "AMP_AGENTID_CLIENT_ID", Value: "staging-client-id"}}, nil)
+	stubUnresolvedMCPs(t, s, "staging", "booking")
+
+	reconcileAttempted := false
+	promoteConfigStub(t, s).ReconcileMCPsFunc = func(context.Context, string, string, string, string) error {
+		reconcileAttempted = true
+		return nil // nothing to bind: the server has no endpoint in staging
+	}
+
+	err := s.PromoteAgent(tierGrantedCtx(t), "acme", "proj1", "my-agent", &spec.PromoteAgentRequest{
+		SourceEnvironment: "dev",
+		TargetEnvironment: "staging",
+	})
+
+	ve := requireBriefPromotionBlock(t, err)
+	assert.Contains(t, ve.Message, "booking")
+	assert.True(t, reconcileAttempted, "the promotion must try to bind before refusing")
+	assert.False(t, *promoteCalled)
+}
+
+// The backfill is best-effort. Its failure must not turn a promotion the recheck would
+// allow into an error — the binding may have been written by something else in the
+// meantime, and the recheck is the authority on whether the target is safe.
+func TestPromoteAgent_BackfillFailureDoesNotBlockAResolvableTarget(t *testing.T) {
+	s, promoteCalled := promoteAgentTestFixture(t, []client.EnvVar{{Key: "AMP_AGENTID_CLIENT_ID", Value: "staging-client-id"}}, nil)
+	agentConfigSvc := promoteConfigStub(t, s)
+
+	checks := 0
+	agentConfigSvc.UnresolvedMCPsFunc = func(_ context.Context, _, _, _, envName string) (map[string]struct{}, error) {
+		checks++
+		if envName == "staging" && checks == 1 {
+			return map[string]struct{}{"booking": {}}, nil
+		}
+		return map[string]struct{}{}, nil
+	}
+	agentConfigSvc.ReconcileMCPsFunc = func(context.Context, string, string, string, string) error {
+		return errors.New("gateway unavailable")
+	}
+
+	err := s.PromoteAgent(tierGrantedCtx(t), "acme", "proj1", "my-agent", &spec.PromoteAgentRequest{
+		SourceEnvironment: "dev",
+		TargetEnvironment: "staging",
+	})
+
+	require.NoError(t, err)
+	assert.True(t, *promoteCalled)
+}
+
 // A connection unresolved in BOTH environments is simply not offered anywhere; this
 // promotion does not break it, so it must not be blocked.
 func TestPromoteAgent_AllowsMCPConnectionUnresolvableInBothEnvironments(t *testing.T) {
@@ -928,6 +1059,53 @@ func TestPromoteAgent_ListsBrokenMCPConnectionsInStableOrder(t *testing.T) {
 
 	ve := requireBriefPromotionBlock(t, err)
 	assert.Contains(t, ve.Message, "booking, payments")
+}
+
+// PromoteComponent's writes land on the Component whether or not OpenChoreo can reconcile
+// it, but a blocked component never gets a new release cut for the target environment. The
+// promote must be refused up front instead of returning 202 for a no-op.
+func TestPromoteAgent_BlocksWhenComponentNotReconcilable(t *testing.T) {
+	s, promoteCalled := promoteAgentTestFixture(t, []client.EnvVar{{Key: "AMP_AGENTID_CLIENT_ID", Value: "staging-client-id"}}, nil)
+	ocMock, ok := s.ocClient.(*clientmocks.OpenChoreoClientMock)
+	require.True(t, ok)
+	ocMock.GetComponentReconcileBlockFunc = func(_ context.Context, _, _ string) (*client.ComponentReconcileBlock, error) {
+		return &client.ComponentReconcileBlock{
+			Reason:  "WorkloadInvalid",
+			Message: "workload references a missing secret",
+		}, nil
+	}
+
+	err := s.PromoteAgent(tierGrantedCtx(t), "acme", "proj1", "my-agent", &spec.PromoteAgentRequest{
+		SourceEnvironment: "dev",
+		TargetEnvironment: "staging",
+	})
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, utils.ErrComponentNotReconcilable)
+	assert.Contains(t, err.Error(), "WorkloadInvalid")
+	assert.Contains(t, err.Error(), "workload references a missing secret")
+	assert.False(t, *promoteCalled,
+		"promotion must be refused before PromoteComponent — otherwise the caller gets a success for a promote the controller silently discarded")
+}
+
+// The pre-flight is an extra safety net, not a dependency: if the conditions cannot be read,
+// a promote that would otherwise succeed must still go through rather than being held hostage
+// to a transient OpenChoreo read failure.
+func TestPromoteAgent_ReconcileLookupFails_PromotesAnyway(t *testing.T) {
+	s, promoteCalled := promoteAgentTestFixture(t, []client.EnvVar{{Key: "AMP_AGENTID_CLIENT_ID", Value: "staging-client-id"}}, nil)
+	ocMock, ok := s.ocClient.(*clientmocks.OpenChoreoClientMock)
+	require.True(t, ok)
+	ocMock.GetComponentReconcileBlockFunc = func(_ context.Context, _, _ string) (*client.ComponentReconcileBlock, error) {
+		return nil, errors.New("openchoreo unavailable")
+	}
+
+	err := s.PromoteAgent(tierGrantedCtx(t), "acme", "proj1", "my-agent", &spec.PromoteAgentRequest{
+		SourceEnvironment: "dev",
+		TargetEnvironment: "staging",
+	})
+
+	require.NoError(t, err)
+	assert.True(t, *promoteCalled)
 }
 
 // The block reports what was actually checked — that the configuration has no
@@ -1090,6 +1268,11 @@ func TestPromoteAgent_KickOffThenRetry_SucceedsOnceTargetIdentityCompletes(t *te
 				{SourceEnvironmentRef: "dev", TargetEnvironmentRefs: []models.TargetEnvironmentRef{{Name: "staging"}}},
 			}}, nil
 		},
+		// Default: the component reconciles normally, so the promote pre-flight lets
+		// it through. Tests covering the pre-flight override this directly.
+		GetComponentReconcileBlockFunc: func(_ context.Context, _, _ string) (*client.ComponentReconcileBlock, error) {
+			return nil, nil //nolint:nilnil // documented contract: a nil block means "not blocked"
+		},
 		IsDeploymentInProgressFunc:      func(_ context.Context, _, _, _ string) (bool, error) { return false, nil },
 		EnsureProjectReleaseBindingFunc: func(_ context.Context, _, _, _ string) error { return nil },
 		PromoteComponentFunc: func(_ context.Context, _, _, _, _, _ string, envOverrides []client.EnvVar, _ []client.FileVar, _, _ map[string]interface{}) error {
@@ -1189,6 +1372,11 @@ func TestPromoteAgent_PollSucceedsWithinBudget_PromotesOnFirstCall(t *testing.T)
 			return &models.DeploymentPipelineResponse{PromotionPaths: []models.PromotionPath{
 				{SourceEnvironmentRef: "dev", TargetEnvironmentRefs: []models.TargetEnvironmentRef{{Name: "staging"}}},
 			}}, nil
+		},
+		// Default: the component reconciles normally, so the promote pre-flight lets
+		// it through. Tests covering the pre-flight override this directly.
+		GetComponentReconcileBlockFunc: func(_ context.Context, _, _ string) (*client.ComponentReconcileBlock, error) {
+			return nil, nil //nolint:nilnil // documented contract: a nil block means "not blocked"
 		},
 		IsDeploymentInProgressFunc:      func(_ context.Context, _, _, _ string) (bool, error) { return false, nil },
 		EnsureProjectReleaseBindingFunc: func(_ context.Context, _, _, _ string) error { return nil },
@@ -1480,6 +1668,11 @@ func TestPromoteAgent_ProvisioningDisabled_SkipsIdentityCheckAndPromotes(t *test
 				{SourceEnvironmentRef: "dev", TargetEnvironmentRefs: []models.TargetEnvironmentRef{{Name: "staging"}}},
 			}}, nil
 		},
+		// Default: the component reconciles normally, so the promote pre-flight lets
+		// it through. Tests covering the pre-flight override this directly.
+		GetComponentReconcileBlockFunc: func(_ context.Context, _, _ string) (*client.ComponentReconcileBlock, error) {
+			return nil, nil //nolint:nilnil // documented contract: a nil block means "not blocked"
+		},
 		IsDeploymentInProgressFunc:      func(_ context.Context, _, _, _ string) (bool, error) { return false, nil },
 		EnsureProjectReleaseBindingFunc: func(_ context.Context, _, _, _ string) error { return nil },
 		PromoteComponentFunc: func(_ context.Context, _, _, _, _, _ string, _ []client.EnvVar, _ []client.FileVar, _, _ map[string]interface{}) error {
@@ -1544,6 +1737,11 @@ func TestPromoteAgent_ProvisioningDisabledButLowestEnvHasRealCredential_StillBlo
 			return &models.DeploymentPipelineResponse{PromotionPaths: []models.PromotionPath{
 				{SourceEnvironmentRef: "dev", TargetEnvironmentRefs: []models.TargetEnvironmentRef{{Name: "staging"}}},
 			}}, nil
+		},
+		// Default: the component reconciles normally, so the promote pre-flight lets
+		// it through. Tests covering the pre-flight override this directly.
+		GetComponentReconcileBlockFunc: func(_ context.Context, _, _ string) (*client.ComponentReconcileBlock, error) {
+			return nil, nil //nolint:nilnil // documented contract: a nil block means "not blocked"
 		},
 		IsDeploymentInProgressFunc:      func(_ context.Context, _, _, _ string) (bool, error) { return false, nil },
 		EnsureProjectReleaseBindingFunc: func(_ context.Context, _, _, _ string) error { return nil },
@@ -1872,6 +2070,11 @@ func TestResolveResilienceTimeoutSeconds(t *testing.T) {
 func deployAPIAgentMocks(existingConfig *models.AgentConfig) (*agentManagerService, *client.ComponentDeploymentConfigRequest) {
 	var capturedDeployConfig client.ComponentDeploymentConfigRequest
 	ocClient := &clientmocks.OpenChoreoClientMock{
+		// The deploy/promote pre-flight reads the component's reconcile conditions;
+		// an unblocked component keeps this test on the path it actually covers.
+		GetComponentReconcileBlockFunc: func(_ context.Context, _, _ string) (*client.ComponentReconcileBlock, error) {
+			return nil, nil //nolint:nilnil // documented contract: a nil block means "not blocked"
+		},
 		GetOrganizationFunc: func(_ context.Context, name string) (*models.OrganizationResponse, error) {
 			return &models.OrganizationResponse{Name: name}, nil
 		},
@@ -1890,8 +2093,12 @@ func deployAPIAgentMocks(existingConfig *models.AgentConfig) (*agentManagerServi
 		GetComponentConfigurationsFunc: func(context.Context, string, string, string, string) ([]models.EnvVars, error) {
 			return nil, nil
 		},
+		// No agent API key seeded on the Component.
+		GetComponentBaseEnvVarsFunc: func(context.Context, string, string) ([]client.EnvVar, error) {
+			return []client.EnvVar{}, nil
+		},
 		GetEnvironmentFunc: func(_ context.Context, _, name string) (*models.EnvironmentResponse, error) {
-			return &models.EnvironmentResponse{Name: name, UUID: "env-uuid"}, nil
+			return &models.EnvironmentResponse{Name: name, UUID: uuid.NewString()}, nil
 		},
 		IsDeploymentInProgressFunc: func(context.Context, string, string, string) (bool, error) {
 			return false, nil
@@ -1907,6 +2114,7 @@ func deployAPIAgentMocks(existingConfig *models.AgentConfig) (*agentManagerServi
 			capturedDeployConfig = req
 			return nil
 		},
+		ListBuildsFunc:                  buildsProducing("registry.example.com/my-agent:v1"),
 		EnsureProjectReleaseBindingFunc: func(_ context.Context, _, _, _ string) error { return nil },
 		DeployFunc: func(context.Context, string, string, string, client.DeployRequest) error {
 			return nil
@@ -1925,6 +2133,7 @@ func deployAPIAgentMocks(existingConfig *models.AgentConfig) (*agentManagerServi
 			return &models.Artifact{UUID: uuid.Must(uuid.NewV7()), Handle: handle, Kind: models.KindAgent, OUID: orgUUID}, nil
 		},
 	}
+	artifactRepo.WithTxFunc = func(*gorm.DB) repositories.ArtifactRepository { return artifactRepo }
 	agentConfigRepo := &repomocks.AgentConfigRepositoryMock{
 		GetFunc: func(context.Context, string, string, string, string) (*models.AgentConfig, error) {
 			if existingConfig == nil {
@@ -1941,55 +2150,26 @@ func deployAPIAgentMocks(existingConfig *models.AgentConfig) (*agentManagerServi
 		agentIdentityInjection: injector,
 		artifactRepo:           artifactRepo,
 		agentConfigRepo:        agentConfigRepo,
+		gatewayRepo:            gatewayRepoMapping(ingressGateway),
 		logger:                 discardLogger(),
 	}
 	return s, &capturedDeployConfig
 }
 
-// covers the deploy-time wiring of ResilienceTimeoutSeconds into the
-// api-management trait's resilienceTimeout parameter.
-func TestDeployAgent_APIAgent_ResilienceTimeout(t *testing.T) {
-	tests := []struct {
-		name                  string
-		existingConfig        *models.AgentConfig
-		wantResilienceTimeout string
-	}{
-		{"persisted value within bounds produces \"<N>s\"", &models.AgentConfig{ResilienceTimeoutSeconds: int32Ptr(45)}, "45s"},
-		{"no persisted config falls back to \"30s\"", nil, "30s"},
-		{"persisted nil falls back to \"30s\"", &models.AgentConfig{}, "30s"},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			s, capturedDeployConfig := deployAPIAgentMocks(tc.existingConfig)
-
-			env, err := s.DeployAgent(tierGrantedCtx(t), "acme", "proj1", "my-agent", &spec.DeployAgentRequest{ImageId: "registry.example.com/my-agent:v1"})
-
-			require.NoError(t, err)
-			assert.Equal(t, "dev", env)
-			apiTrait := findTraitRequest(capturedDeployConfig.TraitsToAttach, client.TraitAPIManagement)
-			require.NotNil(t, apiTrait, "expected an api-management trait to be attached for an API agent deploy")
-			params := applyTraitOpts(apiTrait.Opts)
-			assert.Equal(t, tc.wantResilienceTimeout, params["resilienceTimeout"])
-		})
-	}
-}
-
 // covers the "editable immediately without redeploy" path:
 func TestUpdateAgentDeploySettings_ResilienceTimeout(t *testing.T) {
 	tests := []struct {
-		name                string
-		existingConfig      *models.AgentConfig
-		requested           *int32
-		wantPersisted       *int32
-		wantEnvOverridePush string
+		name           string
+		existingConfig *models.AgentConfig
+		requested      *int32
+		wantPersisted  *int32
 	}{
-		{"request sets a new value", nil, int32Ptr(90), int32Ptr(90), "90s"},
-		{"omitted request keeps existing DB value", &models.AgentConfig{ResilienceTimeoutSeconds: int32Ptr(60)}, nil, int32Ptr(60), "60s"},
-		{"nothing set omits the override, no key pushed", nil, nil, nil, ""},
+		{"request sets a new value", nil, int32Ptr(90), int32Ptr(90)},
+		{"omitted request keeps existing DB value", &models.AgentConfig{ResilienceTimeoutSeconds: int32Ptr(60)}, nil, int32Ptr(60)},
+		{"nothing set persists no override", nil, nil, nil},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			var pushedTraitEnvConfigs map[string]interface{}
 			var persisted *models.AgentConfig
 			ocClient := &clientmocks.OpenChoreoClientMock{
 				GetOrganizationFunc: func(_ context.Context, name string) (*models.OrganizationResponse, error) {
@@ -2001,14 +2181,8 @@ func TestUpdateAgentDeploySettings_ResilienceTimeout(t *testing.T) {
 				GetEnvironmentFunc: func(_ context.Context, _, name string) (*models.EnvironmentResponse, error) {
 					return &models.EnvironmentResponse{Name: name, UUID: "env-uuid"}, nil
 				},
-				UpdateReleaseBindingTraitConfigsFunc: func(_ context.Context, _, _, _ string, traitConfigs map[string]interface{}, _ map[string]interface{}) error {
-					pushedTraitEnvConfigs = traitConfigs
+				UpdateReleaseBindingTraitConfigsFunc: func(context.Context, string, string, string, map[string]interface{}, map[string]interface{}) error {
 					return nil
-				},
-			}
-			artifactRepo := &repomocks.ArtifactRepositoryMock{
-				GetByHandleFunc: func(handle, orgUUID string) (*models.Artifact, error) {
-					return &models.Artifact{UUID: uuid.Must(uuid.NewV7()), Handle: handle, Kind: models.KindAgent, OUID: orgUUID}, nil
 				},
 			}
 			agentConfigRepo := &repomocks.AgentConfigRepositoryMock{
@@ -2025,7 +2199,6 @@ func TestUpdateAgentDeploySettings_ResilienceTimeout(t *testing.T) {
 			}
 			s := &agentManagerService{
 				ocClient:        ocClient,
-				artifactRepo:    artifactRepo,
 				agentConfigRepo: agentConfigRepo,
 				logger:          discardLogger(),
 			}
@@ -2041,13 +2214,6 @@ func TestUpdateAgentDeploySettings_ResilienceTimeout(t *testing.T) {
 			} else {
 				require.NotNil(t, persisted.ResilienceTimeoutSeconds)
 				assert.Equal(t, *tc.wantPersisted, *persisted.ResilienceTimeoutSeconds)
-			}
-			apiTraitCfg, _ := pushedTraitEnvConfigs["my-agent-api-configuration"].(map[string]interface{})
-			if tc.wantEnvOverridePush == "" {
-				_, present := apiTraitCfg["resilienceTimeout"]
-				assert.False(t, present, "expected no resilienceTimeout override to be pushed")
-			} else {
-				assert.Equal(t, tc.wantEnvOverridePush, apiTraitCfg["resilienceTimeout"])
 			}
 		})
 	}
@@ -2528,4 +2694,87 @@ func TestPromoteAgent_VeryLongConfigName_IsShortenedNotPastedWhole(t *testing.T)
 				"a single name must not be able to blow the message past the budget: %s", rendered)
 		})
 	}
+}
+
+// stubSystemConfigs makes both environments carry system-managed keys, so the any-keys guard
+// passes, and gives each environment its own configuration set.
+func stubSystemConfigs(t *testing.T, s *agentManagerService, byEnv map[string][]SystemManagedConfigRef) {
+	t.Helper()
+	stub := promoteConfigStub(t, s)
+	stub.SystemKeysFunc = func(_ context.Context, _, _, _, envName string) (map[string]bool, error) {
+		if len(byEnv[envName]) == 0 {
+			return map[string]bool{}, nil
+		}
+		return map[string]bool{"SOME_SYSTEM_KEY": true}, nil
+	}
+	stub.SystemConfigsFunc = func(_ context.Context, _, _, _, envName string) ([]SystemManagedConfigRef, error) {
+		return byEnv[envName], nil
+	}
+}
+
+// MCP connections are bound across the pipeline while LLM providers are configured in the
+// entry environment only. An agent with both must not pass promotion on its target MCP rows
+// alone: it would deploy with no LLM provider and fail on its first model call.
+func TestPromoteAgent_BlocksWhenTargetHasMCPButNoLLMConfig(t *testing.T) {
+	s, promoteCalled := promoteAgentTestFixture(t, []client.EnvVar{{Key: "AMP_AGENTID_CLIENT_ID", Value: "staging-client-id"}}, nil)
+	stubSystemConfigs(t, s, map[string][]SystemManagedConfigRef{
+		"dev": {
+			{Name: "openai", TypeID: models.AgentConfigTypeIDLLM},
+			{Name: "booking", TypeID: models.AgentConfigTypeIDMCP},
+		},
+		"staging": {
+			{Name: "booking", TypeID: models.AgentConfigTypeIDMCP},
+		},
+	})
+
+	err := s.PromoteAgent(tierGrantedCtx(t), "acme", "proj1", "my-agent", &spec.PromoteAgentRequest{
+		SourceEnvironment: "dev",
+		TargetEnvironment: "staging",
+	})
+
+	ve := requireBriefPromotionBlock(t, err)
+	assert.Contains(t, ve.Message, "openai", "the message must name the missing LLM configuration")
+	assert.NotContains(t, ve.Message, "booking", "the MCP connection is present in the target and must not be blamed")
+	assert.False(t, *promoteCalled, "promotion must be refused before PromoteComponent")
+}
+
+// The same agent promotes once the target has its LLM configuration too.
+func TestPromoteAgent_AllowsWhenTargetHasBothLLMAndMCPConfig(t *testing.T) {
+	s, promoteCalled := promoteAgentTestFixture(t, []client.EnvVar{{Key: "AMP_AGENTID_CLIENT_ID", Value: "staging-client-id"}}, nil)
+	both := []SystemManagedConfigRef{
+		{Name: "openai", TypeID: models.AgentConfigTypeIDLLM},
+		{Name: "booking", TypeID: models.AgentConfigTypeIDMCP},
+	}
+	stubSystemConfigs(t, s, map[string][]SystemManagedConfigRef{"dev": both, "staging": both})
+
+	err := s.PromoteAgent(tierGrantedCtx(t), "acme", "proj1", "my-agent", &spec.PromoteAgentRequest{
+		SourceEnvironment: "dev",
+		TargetEnvironment: "staging",
+	})
+
+	require.NoError(t, err)
+	assert.True(t, *promoteCalled)
+}
+
+// An MCP connection absent from the target is not an LLM gap: `amctl agent mcp unset --env`
+// removes it on purpose, so this guard must not block on it.
+func TestPromoteAgent_DoesNotBlockOnMissingMCPConfigAlone(t *testing.T) {
+	s, promoteCalled := promoteAgentTestFixture(t, []client.EnvVar{{Key: "AMP_AGENTID_CLIENT_ID", Value: "staging-client-id"}}, nil)
+	stubSystemConfigs(t, s, map[string][]SystemManagedConfigRef{
+		"dev": {
+			{Name: "openai", TypeID: models.AgentConfigTypeIDLLM},
+			{Name: "booking", TypeID: models.AgentConfigTypeIDMCP},
+		},
+		"staging": {
+			{Name: "openai", TypeID: models.AgentConfigTypeIDLLM},
+		},
+	})
+
+	err := s.PromoteAgent(tierGrantedCtx(t), "acme", "proj1", "my-agent", &spec.PromoteAgentRequest{
+		SourceEnvironment: "dev",
+		TargetEnvironment: "staging",
+	})
+
+	require.NoError(t, err)
+	assert.True(t, *promoteCalled)
 }

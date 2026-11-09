@@ -21,16 +21,20 @@ import type {
   LLMProviderResponse,
   UpdateLLMProviderRequest,
 } from "@agent-management-platform/types";
+import { useListLLMDeployments } from "@agent-management-platform/api-client";
 import {
   EnvironmentGatewaySelector,
   useConfirmationDialog,
   useUnsavedChangesGuard,
 } from "@agent-management-platform/shared-component";
 import { Alert, Button, Collapse, Skeleton, Stack } from "@wso2/oxygen-ui";
+import { useResourceAccess } from "@agent-management-platform/feature-management";
+import { requestedGatewayStatuses } from "./gatewayDeploymentStatus";
 
 export type LLMProviderDeploymentTabProps = {
   providerData: LLMProviderResponse | null | undefined;
   orgName: string | undefined;
+  providerId: string | undefined;
   isLoading?: boolean;
   onUpdate: (fields: UpdateLLMProviderRequest) => Promise<LLMProviderResponse>;
   isUpdating: boolean;
@@ -45,10 +49,12 @@ const sameGatewaySet = (a: string[], b: string[]): boolean => {
 export function LLMProviderDeploymentTab({
   providerData,
   orgName,
+  providerId,
   isLoading = false,
   onUpdate,
   isUpdating,
 }: LLMProviderDeploymentTabProps) {
+  const { canWrite } = useResourceAccess("llm_provider");
   const seededRef = useRef<{ uuid: string; gateways: string[] } | null>(null);
   const [selectedGatewayIds, setSelectedGatewayIds] = useState<string[]>([]);
   const [isSelectionValid, setIsSelectionValid] = useState(true);
@@ -76,14 +82,41 @@ export function LLMProviderDeploymentTab({
     setSelectedGatewayIds(gateways);
   }, [providerData]);
 
-  const deployedGatewayIds = useMemo(
+  const requestedGatewayIds = useMemo(
     () => providerData?.gateways ?? [],
     [providerData],
   );
 
+  const { data: deployments, isLoading: isLoadingDeployments } =
+    useListLLMDeployments({
+      orgName: orgName ?? "",
+      providerId: providerId ?? "",
+    });
+
+  // Undefined until the deployments list arrives, so the selector falls back
+  // to locking the whole requested set.
+  const gatewayStatuses = useMemo(
+    () =>
+      deployments
+        ? requestedGatewayStatuses(deployments, requestedGatewayIds)
+        : undefined,
+    [deployments, requestedGatewayIds],
+  );
+
+  // Only a gateway that finished deploying has a placement to protect.
+  const lockedGatewayIds = useMemo(
+    () =>
+      gatewayStatuses
+        ? requestedGatewayIds.filter(
+            (uuid) => gatewayStatuses.get(uuid)?.status === "DEPLOYED",
+          )
+        : requestedGatewayIds,
+    [gatewayStatuses, requestedGatewayIds],
+  );
+
   const isDirty = useMemo(
-    () => !sameGatewaySet(selectedGatewayIds, deployedGatewayIds),
-    [selectedGatewayIds, deployedGatewayIds],
+    () => !sameGatewaySet(selectedGatewayIds, requestedGatewayIds),
+    [selectedGatewayIds, requestedGatewayIds],
   );
 
   const handleDiscard = useCallback(() => {
@@ -95,11 +128,12 @@ export function LLMProviderDeploymentTab({
   const runUpdate = useCallback(async () => {
     try {
       await onUpdate({ gateways: selectedGatewayIds });
-      // The PUT response drops per-gateway deploy outcomes; only the refetched
-      // GET (the mutation invalidates ["llm-provider"]) reports what actually
-      // deployed. Recording the requested set as the seed makes the effect
-      // re-seed from any refetch that disagrees with it, so a gateway whose
-      // deploy failed reverts to undeployed.
+      // The GET's gateways[] is the requested set (status_desired), so a
+      // gateway whose deploy fails stays in it: the row stays checked and
+      // shows Failed from the deployments list rather than reverting.
+      // Recording the requested set as the seed makes the effect re-seed only
+      // when a refetch (the mutation invalidates ["llm-provider"]) disagrees
+      // with what was saved.
       if (seededRef.current) {
         seededRef.current = {
           ...seededRef.current,
@@ -138,7 +172,7 @@ export function LLMProviderDeploymentTab({
     void runUpdate();
   }, [providerData, selectedGatewayIds, addConfirmation, runUpdate]);
 
-  if (isLoading) {
+  if (isLoading || isLoadingDeployments) {
     return (
       <Stack spacing={1}>
         {[1, 2, 3].map((i) => (
@@ -158,9 +192,10 @@ export function LLMProviderDeploymentTab({
         orgId={orgName ?? ""}
         value={selectedGatewayIds}
         onChange={setSelectedGatewayIds}
-        lockedGatewayIds={providerData.gateways ?? []}
+        lockedGatewayIds={lockedGatewayIds}
+        gatewayStatuses={gatewayStatuses}
         onValidityChange={setIsSelectionValid}
-        disabled={isUpdating}
+        disabled={isUpdating || !canWrite}
       />
       <Stack spacing={1.5} width="100%">
         <Collapse in={!!status} timeout={300}>
@@ -174,6 +209,7 @@ export function LLMProviderDeploymentTab({
             </Alert>
           )}
         </Collapse>
+        {canWrite && (
         <Stack direction="row" spacing={1.5} justifyContent="flex-end">
           <Button
             variant="outlined"
@@ -190,6 +226,7 @@ export function LLMProviderDeploymentTab({
             {isUpdating ? "Saving..." : "Save"}
           </Button>
         </Stack>
+        )}
       </Stack>
     </Stack>
   );

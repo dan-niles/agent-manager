@@ -113,9 +113,11 @@ Feature pages are discovered by their exported `metaData` (`{ title, icon, path,
 - `false` → Asgardeo OAuth2 (`AsgardeoProvider`, real tokens/scopes).
 - `true` → no-auth stub (`getToken` → empty string, always authenticated) for local dev.
 
-`globalConfig` = `window.__RUNTIME_CONFIG__`, injected by `apps/web-ui/public/config.js` (rendered from `config.template.js` via env substitution) **before React mounts**. To change auth mode you set `DISABLE_AUTH` in that config and reload — it cannot flip at runtime.
+`globalConfig` = `window.__RUNTIME_CONFIG__`, injected by `apps/web-ui/public/config.js` **before React mounts**. It is filled from `config.template.js`: in dev, the Vite server serves it from `apps/web-ui/.env.development` plus the process env (`vite.config.ts`, `runtimeConfig`); in production, the image's `40-config-setup.sh` renders it with envsubst. To change auth mode you set `DISABLE_AUTH` in that config and reload — it cannot flip at runtime.
 
 ## Conventions & gotchas
+
+- **UI/UX rules** (page actions, create/edit pages vs drawers, listing and empty states, form grid, labels) are in [`UX_GUIDELINES.md`](UX_GUIDELINES.md). Read it before building or changing a page.
 
 - **UI imports** from `@wso2/oxygen-ui` (+ `@wso2/oxygen-ui-icons-react`), not `@mui/material`. Theme is `AcrylicOrangeTheme` via `OxygenUIThemeProvider`. Use theme tokens in `sx` (`color: "text.primary"`, `p: 2`).
 - **No floating labels on `TextField`** — don't pass `label` to `TextField` (it produces MUI's floating/shrinking label). Use a static label instead: `FormControl` + `FormLabel` above the field (see `libs/views/src/component/FormElements/TextInput.tsx`), or a `Typography` caption for read-only display cards.

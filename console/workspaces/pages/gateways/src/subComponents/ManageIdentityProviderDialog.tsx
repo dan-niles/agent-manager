@@ -47,23 +47,25 @@ import {
   useUpsertIdentityProvider,
 } from "@agent-management-platform/api-client";
 import {
-  globalConfig,
+  isManagedGateway,
   type GatewayEnvironmentResponse,
   type IdentityProvider,
   INPUT_LIMITS,
 } from "@agent-management-platform/types";
 import {
-  getAgentManagerUrl,
-  getAmpVersionHelm,
-  getRawScriptUrl,
   useConfirmIfUnsaved,
   useUnsavedChangesGuard,
 } from "@agent-management-platform/shared-component";
+import {
+  buildScript,
+  type ManageIdentityProviderMode,
+  type ScriptInputs,
+} from "./manageIdentityProviderScript";
+import { useFeatureFlag } from "@agent-management-platform/feature-management";
 
-const SCRIPT_NAME = "manage-identity-provider.sh";
+export type { ManageIdentityProviderMode };
+
 const TOKEN_MASK = "•••••••••••••••";
-
-export type ManageIdentityProviderMode = "upsert" | "delete";
 
 interface ManageIdentityProviderDialogProps {
   open: boolean;
@@ -82,50 +84,6 @@ interface ManageIdentityProviderDialogProps {
     name: string;
     environments: GatewayEnvironmentResponse[];
   } | null;
-}
-
-export interface ScriptInputs {
-  orgId: string;
-  envName: string;
-  gatewayId: string;
-  name: string;
-  issuer: string;
-  jwksUri: string;
-  skipTlsVerify: boolean;
-  mode: ManageIdentityProviderMode;
-  token: string;
-}
-
-/** Quote a value as one POSIX shell word without evaluating metacharacters. */
-export function quoteShellWord(value: string): string {
-  return `'${value.replace(/'/g, `'"'"'`)}'`;
-}
-
-export function buildScript(i: ScriptInputs): string {
-  // The dev-container quickstart and a real cluster both install the gateway
-  // extension from the same OCI chart, so one command works for both: curl the
-  // release-pinned script and upgrade the OCI chart at the deployed version.
-  const actionEnvLines =
-    i.mode === "delete"
-      ? ["    ACTION=delete \\"]
-      : [
-          `    IDP_ISSUER=${quoteShellWord(i.issuer || "<issuer>")} \\`,
-          `    IDP_JWKS_URI=${quoteShellWord(i.jwksUri || "<jwks-uri>")} \\`,
-          ...(i.skipTlsVerify ? ["    IDP_SKIP_TLS_VERIFY=true \\"] : []),
-        ];
-  const lines = [
-    `curl -fsSL ${quoteShellWord(getRawScriptUrl(SCRIPT_NAME))} \\`,
-    `  | ORG_NAME=${quoteShellWord(i.orgId || "<org>")} \\`,
-    `    ENV_NAME=${quoteShellWord(i.envName || "<env-name>")} \\`,
-    `    GATEWAY_ID=${quoteShellWord(i.gatewayId || "<gateway-id>")} \\`,
-    `    AGENT_MANAGER_TOKEN=${quoteShellWord(i.token)} \\`,
-    `    AGENT_MANAGER_URL=${quoteShellWord(getAgentManagerUrl())} \\`,
-    `    CHART_VERSION=${quoteShellWord(getAmpVersionHelm())} \\`,
-    `    IDP_NAME=${quoteShellWord(i.name || "<identity-provider-name>")} \\`,
-    ...actionEnvLines,
-    "    bash",
-  ];
-  return lines.join("\n");
 }
 
 export function ManageIdentityProviderDialog({
@@ -160,7 +118,7 @@ export function ManageIdentityProviderDialog({
   // Managed mode: when enabled, the server patches the gateway runtime config
   // directly. When off (self-hosted default), the dialog renders the script
   // snippet exactly as before.
-  const managedMode = globalConfig.featureFlags?.enableIdentityProviderManagedMode === true;
+  const managedMode = useFeatureFlag("enableIdentityProviderManagedMode");
   const upsertIdp = useUpsertIdentityProvider();
   const deleteIdp = useDeleteIdentityProvider();
   const isSubmitting = upsertIdp.isPending || deleteIdp.isPending;
@@ -201,13 +159,16 @@ export function ManageIdentityProviderDialog({
   ]);
 
   const { data: environments } = useListEnvironments({ orgName: orgId });
-  // Gateways belonging to the selected environment populate the gateway picker
-  // (only used when no gateway is locked in).
+  // The selected environment's managed gateways populate the gateway picker (only used
+  // when no gateway is locked in): a self-hosted gateway has no identity providers here.
   const { data: gatewaysResp } = useListGateways(
     { orgName: orgId },
     envName ? { environment: envName } : undefined,
   );
-  const gateways = useMemo(() => gatewaysResp?.gateways ?? [], [gatewaysResp]);
+  const gateways = useMemo(
+    () => (gatewaysResp?.gateways ?? []).filter(isManagedGateway),
+    [gatewaysResp],
+  );
 
   // Environment choices: scoped to the locked gateway when present, otherwise
   // every environment in the org.
@@ -334,7 +295,7 @@ export function ManageIdentityProviderDialog({
 
   const environmentField = (
     <FormControl fullWidth disabled={isDelete}>
-      <FormLabel required>Environment</FormLabel>
+      <FormLabel>Environment</FormLabel>
       <Select
         size="small"
         value={envName}
@@ -357,7 +318,7 @@ export function ManageIdentityProviderDialog({
 
   const gatewayField = (
     <FormControl fullWidth disabled={isDelete || (!isGatewayLocked && !envName)}>
-      <FormLabel required>Gateway</FormLabel>
+      <FormLabel>Gateway</FormLabel>
       {isGatewayLocked ? (
         <TextField
           size="small"
@@ -430,7 +391,7 @@ export function ManageIdentityProviderDialog({
             )}
 
             <FormControl fullWidth disabled={isDelete}>
-              <FormLabel required>Name</FormLabel>
+              <FormLabel>Name</FormLabel>
               <TextField
                 slotProps={{ htmlInput: { maxLength: INPUT_LIMITS.NAME } }}
                 size="small"
@@ -472,7 +433,7 @@ export function ManageIdentityProviderDialog({
                 {discoveryError && <Alert severity="warning">{discoveryError}</Alert>}
 
                 <FormControl fullWidth>
-                  <FormLabel required>Issuer</FormLabel>
+                  <FormLabel>Issuer</FormLabel>
                   <TextField
                     slotProps={{ htmlInput: { maxLength: INPUT_LIMITS.URL } }}
                     size="small"
@@ -484,7 +445,7 @@ export function ManageIdentityProviderDialog({
                 </FormControl>
 
                 <FormControl fullWidth>
-                  <FormLabel required>JWKS URI</FormLabel>
+                  <FormLabel>JWKS URI</FormLabel>
                   <TextField
                     slotProps={{ htmlInput: { maxLength: INPUT_LIMITS.URL } }}
                     size="small"
@@ -516,13 +477,6 @@ export function ManageIdentityProviderDialog({
                 position: "relative",
                 bgcolor: "grey.900",
                 borderRadius: 1,
-                p: 2,
-                pr: 8,
-                fontFamily: "monospace",
-                fontSize: "0.8125rem",
-                color: "grey.100",
-                whiteSpace: "pre",
-                overflowX: "auto",
               }}
             >
               <Box sx={{ position: "absolute", top: 6, right: 6, display: "flex", gap: 0.5 }}>
@@ -541,7 +495,20 @@ export function ManageIdentityProviderDialog({
                   </IconButton>
                 </Tooltip>
               </Box>
-              {displayScript}
+              {/* Scrolls on its own so the copy/show icons stay put. */}
+              <Box
+                sx={{
+                  p: 2,
+                  pr: 9,
+                  fontFamily: "monospace",
+                  fontSize: "0.8125rem",
+                  color: "grey.100",
+                  whiteSpace: "pre",
+                  overflowX: "auto",
+                }}
+              >
+                {displayScript}
+              </Box>
             </Box>
             <Typography variant="caption" color="text.secondary">
               Your access token will be substituted when you copy.

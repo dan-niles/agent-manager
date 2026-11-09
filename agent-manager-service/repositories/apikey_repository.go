@@ -18,10 +18,18 @@ package repositories
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"time"
 
-	"github.com/wso2/agent-manager/agent-manager-service/models"
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
+
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
+
+	"github.com/wso2/agent-manager/agent-manager-service/models"
+	"github.com/wso2/agent-manager/agent-manager-service/utils"
 )
 
 // APIKeyRepository defines the interface for API key persistence
@@ -29,21 +37,33 @@ import (
 //go:generate moq -rm -fmt goimports -skip-ensure -pkg repomocks -out repomocks/apikey_repository_mock.go . APIKeyRepository:APIKeyRepositoryMock
 type APIKeyRepository interface {
 	Upsert(key *models.StoredAPIKey) error
+	// Insert stores key as a new row, and returns utils.ErrAPIKeyNameTaken when the artifact already has a key of
+	// that name, so a caller can claim a name it read as free without racing another request for it.
+	Insert(key *models.StoredAPIKey) error
+	// ReplaceIfUnchanged gives the stored key key.Name of key.ArtifactUUID the value, status, update time and expiry
+	// of key, only while its hash is still prevHash. It returns utils.ErrAPIKeyChanged when another request
+	// rotated or removed the key first.
+	ReplaceIfUnchanged(key *models.StoredAPIKey, prevHash string) error
 	Delete(artifactUUID, name string) error
 	ListByArtifact(ctx context.Context, artifactUUID string) ([]models.StoredAPIKey, error)
 	ListByArtifactKind(ouID, kind string) ([]models.StoredAPIKey, error)
-	// ListByArtifactKindAndEnvs returns all active API keys for artifacts of a given kind
+	// ListByArtifactKindAndEnvs returns all active API keys for artifacts of any of the given kinds
 	// whose handle encodes one of the supplied environment UUIDs (handle format: "project/agent/<envUUID>").
 	// Used by the gateway bulk-sync path to scope agent keys to the gateway's own environments.
-	ListByArtifactKindAndEnvs(ouID, kind string, envUUIDs []string) ([]models.StoredAPIKey, error)
-	// ListPermanentByArtifactKind returns only user-managed (permanent) keys.
+	ListByArtifactKindAndEnvs(ouID string, kinds []string, envUUIDs []string) ([]models.StoredAPIKey, error)
+	// ListPermanentByArtifactKinds returns only user-managed (permanent) keys.
 	// Used by the Credentials list so console-managed test keys stay hidden.
-	ListPermanentByArtifactKind(ouID, kind string) ([]models.StoredAPIKey, error)
+	ListPermanentByArtifactKinds(ouID string, kinds []string) ([]models.StoredAPIKey, error)
 	// GetByArtifactAndName returns gorm.ErrRecordNotFound when no row matches.
 	GetByArtifactAndName(artifactUUID, name string) (*models.StoredAPIKey, error)
 	// ListByApplicationUUID returns all API keys whose artifact_uuid matches the given AI application UUID.
 	// Used by the gateway bulk-sync path to populate per-application key bindings.
 	ListByApplicationUUID(applicationUUID string) ([]models.StoredAPIKey, error)
+	// ListActiveByArtifactTx returns the artifact's keys a gateway would still accept at now.
+	ListActiveByArtifactTx(ctx context.Context, tx *gorm.DB, artifactUUID uuid.UUID, now time.Time) ([]models.StoredAPIKey, error)
+	// Transaction runs fn in a database transaction, with a repository bound to it and the transaction itself, so a
+	// key write and the gateway events it produces commit together.
+	Transaction(ctx context.Context, fn func(repo APIKeyRepository, tx *gorm.DB) error) error
 }
 
 // APIKeyRepo implements APIKeyRepository using GORM
@@ -56,12 +76,49 @@ func NewAPIKeyRepo(db *gorm.DB) *APIKeyRepo {
 	return &APIKeyRepo{db: db}
 }
 
+// Transaction runs fn in a database transaction; see APIKeyRepository.Transaction.
+func (r *APIKeyRepo) Transaction(ctx context.Context, fn func(repo APIKeyRepository, tx *gorm.DB) error) error {
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		return fn(&APIKeyRepo{db: tx}, tx)
+	})
+}
+
 // Upsert creates or updates an API key record
 func (r *APIKeyRepo) Upsert(key *models.StoredAPIKey) error {
 	return r.db.Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "artifact_uuid"}, {Name: "name"}},
 		DoUpdates: clause.AssignmentColumns([]string{"api_key_hash", "masked_api_key", "status", "updated_at", "expires_at"}),
 	}).Create(key).Error
+}
+
+// Insert stores key as a new row; see APIKeyRepository.Insert.
+func (r *APIKeyRepo) Insert(key *models.StoredAPIKey) error {
+	err := r.db.Create(key).Error
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == pgUniqueViolation {
+		return fmt.Errorf("%w: %q", utils.ErrAPIKeyNameTaken, key.Name)
+	}
+	return err
+}
+
+// ReplaceIfUnchanged replaces the key's value only while its hash is prevHash; see APIKeyRepository.ReplaceIfUnchanged.
+func (r *APIKeyRepo) ReplaceIfUnchanged(key *models.StoredAPIKey, prevHash string) error {
+	res := r.db.Model(&models.StoredAPIKey{}).
+		Where("artifact_uuid = ? AND name = ? AND api_key_hash = ?", key.ArtifactUUID, key.Name, prevHash).
+		Updates(map[string]any{
+			"api_key_hash":   key.APIKeyHash,
+			"masked_api_key": key.MaskedAPIKey,
+			"status":         key.Status,
+			"updated_at":     key.UpdatedAt,
+			"expires_at":     key.ExpiresAt,
+		})
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		return fmt.Errorf("%w: %q", utils.ErrAPIKeyChanged, key.Name)
+	}
+	return nil
 }
 
 // Delete removes an API key by artifact UUID and key name
@@ -90,13 +147,13 @@ func (r *APIKeyRepo) ListByArtifactKind(ouID, kind string) ([]models.StoredAPIKe
 
 // ListByArtifactKindAndEnvs returns all active API keys for artifacts whose handle ends with
 // "/<envUUID>" for any of the provided environment UUIDs. Empty envUUIDs returns nil, nil.
-func (r *APIKeyRepo) ListByArtifactKindAndEnvs(ouID, kind string, envUUIDs []string) ([]models.StoredAPIKey, error) {
+func (r *APIKeyRepo) ListByArtifactKindAndEnvs(ouID string, kinds []string, envUUIDs []string) ([]models.StoredAPIKey, error) {
 	if len(envUUIDs) == 0 {
 		return nil, nil
 	}
 	query := r.db.
 		Joins("JOIN artifacts a ON api_keys.artifact_uuid = a.uuid").
-		Where("a.ou_id = ? AND a.kind = ?", ouID, kind)
+		Where("a.ou_id = ? AND a.kind IN ?", ouID, kinds)
 
 	// Build OR conditions matching the environment UUID suffix in the artifact handle.
 	// Artifact handle format: "projectName/agentName/<environmentUUID>"
@@ -110,13 +167,13 @@ func (r *APIKeyRepo) ListByArtifactKindAndEnvs(ouID, kind string, envUUIDs []str
 	return keys, err
 }
 
-// ListPermanentByArtifactKind returns only user-managed permanent keys.
-func (r *APIKeyRepo) ListPermanentByArtifactKind(ouID, kind string) ([]models.StoredAPIKey, error) {
+// ListPermanentByArtifactKinds returns only user-managed permanent keys.
+func (r *APIKeyRepo) ListPermanentByArtifactKinds(ouID string, kinds []string) ([]models.StoredAPIKey, error) {
 	var keys []models.StoredAPIKey
 	err := r.db.
 		Joins("JOIN artifacts a ON api_keys.artifact_uuid = a.uuid").
-		Where("a.ou_id = ? AND a.kind = ? AND api_keys.purpose = ?",
-			ouID, kind, models.APIKeyPurposeUserManaged).
+		Where("a.ou_id = ? AND a.kind IN ? AND api_keys.purpose = ?",
+			ouID, kinds, models.APIKeyPurposeUserManaged).
 		Find(&keys).Error
 	return keys, err
 }
@@ -135,5 +192,19 @@ func (r *APIKeyRepo) GetByArtifactAndName(artifactUUID, name string) (*models.St
 func (r *APIKeyRepo) ListByApplicationUUID(applicationUUID string) ([]models.StoredAPIKey, error) {
 	var keys []models.StoredAPIKey
 	err := r.db.Where("artifact_uuid = ?", applicationUUID).Find(&keys).Error
+	return keys, err
+}
+
+// ListActiveByArtifactTx returns the artifact's active keys that have not expired at now, oldest first. The rows are
+// held FOR SHARE until tx commits, so a concurrent revoke waits for the keys tx publishes instead of racing them.
+func (r *APIKeyRepo) ListActiveByArtifactTx(
+	ctx context.Context, tx *gorm.DB, artifactUUID uuid.UUID, now time.Time,
+) ([]models.StoredAPIKey, error) {
+	var keys []models.StoredAPIKey
+	err := tx.WithContext(ctx).
+		Clauses(clause.Locking{Strength: "SHARE"}).
+		Where("artifact_uuid = ? AND status = 'active' AND (expires_at IS NULL OR expires_at > ?)", artifactUUID, now).
+		Order("created_at, uuid").
+		Find(&keys).Error
 	return keys, err
 }

@@ -19,6 +19,7 @@
 import React, { useCallback, useMemo, useState } from "react";
 import {
   formatTraceWindow,
+  MONITOR_TIME_RANGE_OPTIONS,
   PageLayout,
   TimeRangeSelector,
   useTimeRangeParams,
@@ -74,18 +75,12 @@ import {
 } from "@agent-management-platform/api-client";
 import { useQueryClient } from "@tanstack/react-query";
 import MonitorRunList from "./subComponents/MonitorRunList";
+import { MonitorAlertButton } from "./subComponents/MonitorAlertButton";
 import {
   computeAverageScore,
   computeLevelSummaries,
   getMean,
 } from "./utils/monitorScoreUtils";
-
-const MONITOR_TIME_RANGE_OPTIONS = [
-  { value: TraceListTimeRange.ONE_DAY, label: "Last 1 Day" },
-  { value: TraceListTimeRange.THREE_DAYS, label: "Last 3 Days" },
-  { value: TraceListTimeRange.SEVEN_DAYS, label: "Last 7 Days" },
-  { value: TraceListTimeRange.THIRTY_DAYS, label: "Last 30 Days" },
-];
 
 export const ViewMonitorComponent: React.FC = () => {
   const { orgId, projectId, agentId, envId, monitorId } = useParams();
@@ -386,7 +381,7 @@ export const ViewMonitorComponent: React.FC = () => {
           <PageLayout
             title={`Run History ${monitorData?.displayName ? `(${monitorData.displayName})` : ""}`}
             disableIcon
-            backLabel={`Back to ${monitorData?.displayName ?? "Monitor"}`}
+            backLabel={`Back to ${monitorData?.displayName ?? "monitor"}`}
             backHref={generatePath(
               absoluteRouteMap.children.org.children.projects.children.agents
                 .children.environment.children.evaluation.children.monitor
@@ -429,7 +424,7 @@ export const ViewMonitorComponent: React.FC = () => {
               ) : undefined
             }
             disableIcon
-            backLabel="Back to Monitors"
+            backLabel="Back to monitors"
             backHref={generatePath(
               absoluteRouteMap.children.org.children.projects.children.agents
                 .children.environment.children.evaluation.children.monitor.path,
@@ -461,6 +456,14 @@ export const ViewMonitorComponent: React.FC = () => {
                     onCustomRangeApply={handleCustomRangeApply}
                   />
                 )}
+                <MonitorAlertButton
+                  orgName={orgId}
+                  projName={projectId}
+                  agentName={agentId}
+                  monitorName={monitorId}
+                  monitorDisplayName={monitorData?.displayName}
+                  evaluators={monitorData?.evaluators ?? []}
+                />
                 <Button
                   size="small"
                   variant="outlined"

@@ -41,9 +41,22 @@ interface AgentRequestBase {
   build?: Build;
   configurations?: Configurations;
   inputInterface?: InputInterface;
+  /** Health checks for the agent's builds. Omitted checks use the defaults. */
+  healthChecks?: HealthChecks;
   modelConfig?: ModelConfigRequest[];
   mcpConfig?: MCPConfigRequest[];
   labels?: Record<string, string>;
+  /** Optional GitHub App source binding. Omitted by the built-in PAT flow. */
+  githubApp?: GitHubAppSource;
+}
+
+export interface GitHubAppSource {
+  installationId: number;
+  owner: string;
+  repo: string;
+  branch?: string;
+  appPath?: string;
+  repositoryUrl?: string;
 }
 
 interface UpdateAgentBasicInfoRequest {
@@ -59,6 +72,11 @@ interface UpdateAgentBuildParametersRequest {
   build?: Build;
   configurations?: Configurations;
   inputInterface?: InputInterface;
+  /**
+   * Replaces the saved health checks; {} goes back to the defaults. Omit to keep the
+   * saved ones. Applied by the next build.
+   */
+  healthChecks?: HealthChecks;
 }
 
 export type CreateAgentRequest = AgentRequestBase;
@@ -76,9 +94,37 @@ export interface InputInterface {
   basePath?: string;
 }
 
+export type HealthCheckType = 'TCP' | 'HTTP';
+
+/** One health check. A field that is not set uses its default. */
+export interface HealthCheck {
+  /** Whether the check runs. Defaults to true. */
+  enabled?: boolean;
+  /** TCP opens a connection to the port; HTTP sends a GET request to the path. Defaults to TCP. */
+  type?: HealthCheckType;
+  /** Path for an HTTP check, starting with /. */
+  path?: string;
+  /** Port to check. Defaults to the agent's port. */
+  port?: number;
+  initialDelaySeconds?: number;
+  periodSeconds?: number;
+  timeoutSeconds?: number;
+  failureThreshold?: number;
+}
+
+/**
+ * Startup, readiness and liveness checks. A check that is not set uses the default:
+ * startup and readiness are TCP checks on the agent's port, and there is no liveness check.
+ */
+export interface HealthChecks {
+  startup?: HealthCheck;
+  readiness?: HealthCheck;
+  liveness?: HealthCheck;
+}
+
 export interface AgentType {
   type: string;
-  subType: string;
+  subType?: string;
 }
 
 export type ProvisioningType = 'internal' | 'external';
@@ -117,6 +163,8 @@ export interface AgentResponse {
   build?: Build;
   configurations?: Configurations;
   inputInterface?: InputInterface;
+  /** Health checks saved in the build settings, which the next build records. */
+  healthChecks?: HealthChecks;
   uuid?: string;
   kindName?: string;
   kindVersion?: string;
@@ -247,4 +295,3 @@ export type RevokeAgentIdentitySecretPathParams = AgentPathParams;
 export interface RevokeAgentIdentitySecretQuery {
   environment: string;
 }
-

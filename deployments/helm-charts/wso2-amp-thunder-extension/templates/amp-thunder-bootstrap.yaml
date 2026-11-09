@@ -497,6 +497,13 @@ data:
           - { name: Execute, handle: execute, description: "Start, stop, and rerun monitors" }
           - { name: Read Score, handle: score-read, description: "View scores, breakdowns, and timeseries" }
           - { name: Publish Score, handle: score-publish, description: "Publish monitor scores (internal/system use)" }
+      - name: Events
+        handle: events
+        parent: amp
+        description: Event destinations, organization event subscriptions and the delivery log
+        actions:
+          - { name: Read, handle: read, description: "View event destinations, organization subscriptions and the delivery log" }
+          - { name: Manage, handle: manage, description: "Add, change, test and delete event destinations and organization subscriptions" }
       - name: Observability
         handle: observability
         parent: amp
@@ -601,6 +608,20 @@ data:
           - { name: Act on Non-Production Environments, handle: env-non-production, description: "Deploy or suspend an agent in a non-production environment" }
           - { name: Suspend, handle: suspend, description: "Suspend an agent deployment" }
           - { name: Manage Token, handle: token-manage, description: "Generate agent tokens" }
+          - { name: Update, handle: update, description: "Attach LLM providers and MCP proxies to an agent" }
+      - name: LLM Provider
+        handle: llm-provider
+        parent: amp
+        description: LLM provider operations exposed by Agent Manager MCP
+        actions:
+          - { name: Read, handle: read, description: "View LLM providers and guardrails" }
+          - { name: Update, handle: update, description: "Change LLM provider guardrails" }
+      - name: MCP Server
+        handle: mcp-server
+        parent: amp
+        description: MCP proxy operations exposed by Agent Manager MCP
+        actions:
+          - { name: Read, handle: read, description: "View MCP proxies" }
     {{- end }}
   {{- $firstMCPResourceServer = false }}
   {{- end }}
@@ -698,6 +719,8 @@ data:
           - "amp:monitor:execute"
           - "amp:monitor:score-read"
           - "amp:monitor:score-publish"
+          - "amp:events:read"
+          - "amp:events:manage"
           - "amp:observability:trace-read"
           - "amp:observability:log-read"
           - "amp:observability:build-log-read"
@@ -720,7 +743,7 @@ data:
           - "amp:profile:update-attributes"
     {{- range $server := .Values.thunder.bootstrap.mcpResourceServers }}
     {{- if index $.Values.thunder.bootstrap $server.baseUrlValue }}
-      - resourceServerId: {{ $server.id }}
+      - resourceServerId: {{ $server.id | quote }}
         permissions:
     {{- if eq $server.permissionSet "observability-only" }}
           - "amp:observability:trace-read"
@@ -737,6 +760,10 @@ data:
           - "amp:agent:env-non-production"
           - "amp:agent:suspend"
           - "amp:agent:token-manage"
+          - "amp:agent:update"
+          - "amp:llm-provider:read"
+          - "amp:mcp-server:read"
+          - "amp:llm-provider:update"
     {{- end }}
     {{- end }}
     {{- end }}
@@ -813,7 +840,7 @@ data:
           - "amp:profile:update-attributes"
     {{- range $server := .Values.thunder.bootstrap.mcpResourceServers }}
     {{- if index $.Values.thunder.bootstrap $server.baseUrlValue }}
-      - resourceServerId: {{ $server.id }}
+      - resourceServerId: {{ $server.id | quote }}
         permissions:
     {{- if eq $server.permissionSet "observability-only" }}
           - "amp:observability:trace-read"
@@ -830,6 +857,9 @@ data:
           - "amp:agent:env-non-production"
           - "amp:agent:suspend"
           - "amp:agent:token-manage"
+          - "amp:agent:update"
+          - "amp:llm-provider:read"
+          - "amp:mcp-server:read"
     {{- end }}
     {{- end }}
     {{- end }}
@@ -896,7 +926,7 @@ data:
           - "amp:profile:update-attributes"
     {{- range $server := .Values.thunder.bootstrap.mcpResourceServers }}
     {{- if index $.Values.thunder.bootstrap $server.baseUrlValue }}
-      - resourceServerId: {{ $server.id }}
+      - resourceServerId: {{ $server.id | quote }}
         permissions:
     {{- if eq $server.permissionSet "observability-only" }}
           - "amp:observability:trace-read"
@@ -908,6 +938,9 @@ data:
           - "amp:agent:build"
           - "amp:agent:env-non-production"
           - "amp:agent:suspend"
+          - "amp:llm-provider:read"
+          - "amp:mcp-server:read"
+          - "amp:llm-provider:update"
     {{- end }}
     {{- end }}
     {{- end }}
@@ -992,7 +1025,7 @@ data:
           - "amp:profile:update-attributes"
     {{- range $server := .Values.thunder.bootstrap.mcpResourceServers }}
     {{- if index $.Values.thunder.bootstrap $server.baseUrlValue }}
-      - resourceServerId: {{ $server.id }}
+      - resourceServerId: {{ $server.id | quote }}
         permissions:
     {{- if eq $server.permissionSet "observability-only" }}
           - "amp:observability:trace-read"
@@ -1007,6 +1040,9 @@ data:
           - "amp:agent:build"
           - "amp:agent:env-non-production"
           - "amp:agent:suspend"
+          - "amp:llm-provider:read"
+          - "amp:mcp-server:read"
+          - "amp:llm-provider:update"
     {{- end }}
     {{- end }}
     {{- end }}

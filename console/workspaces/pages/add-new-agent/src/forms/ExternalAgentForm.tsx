@@ -16,20 +16,19 @@
  * under the License.
  */
 
-import { Box, CircularProgress, Divider, Form, Stack, TextField, Typography } from "@wso2/oxygen-ui";
-import { CheckCircle, Circle } from "@wso2/oxygen-ui-icons-react";
-import { useCallback, useEffect, useMemo } from "react";
+import { CircularProgress, Form, Grid, Stack, Typography } from "@wso2/oxygen-ui";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
 import { debounce } from "lodash";
 import { useGenerateResourceName } from "@agent-management-platform/api-client";
 import { LabelsEditor, MarkdownEditor } from "@agent-management-platform/shared-component";
+import { AgentHandleField } from "../components/AgentHandleField";
 import { ConnectAgentFormValues } from "../form/schema";
 import { INPUT_LIMITS } from "@agent-management-platform/types";
-
-const EXTERNAL_SUBTYPE_OPTIONS = [
-  { value: "custom-api", label: "Agent", description: "Any externally hosted agent. Observability only." },
-  { value: "a2a-agent", label: "A2A Agent", description: "Speaks A2A 1.0. Register its agent card URL per environment after creating it." },
-] as const;
+import {
+  TextInput,
+  FormGridSpacer,
+} from "@agent-management-platform/views";
 
 interface ExternalAgentFormProps {
   formData: ConnectAgentFormValues;
@@ -54,6 +53,7 @@ export const ExternalAgentForm = ({
   validateField,
 }: ExternalAgentFormProps) => {
   const { orgId, projectId } = useParams<{ orgId: string; projectId: string }>();
+  const [isHandleEditable, setIsHandleEditable] = useState(false);
   const { mutate: generateName, isPending: isGeneratingName } = useGenerateResourceName({
     orgName: orgId,
   });
@@ -105,30 +105,36 @@ export const ExternalAgentForm = ({
 
   // Auto-generate name from display name using API with debounce
   useEffect(() => {
+    if (isHandleEditable) {
+      debouncedGenerateName.cancel();
+      return;
+    }
     if (formData.displayName && formData.displayName.length >= 3) {
       debouncedGenerateName(formData.displayName);
     } else {
       debouncedGenerateName.cancel();
       handleFieldChange("name", "");
     }
-  }, [formData.displayName, debouncedGenerateName, handleFieldChange]);
+  }, [formData.displayName, debouncedGenerateName, handleFieldChange, isHandleEditable]);
 
   return (
     <Form.Stack spacing={3}>
-      <Form.Section>
-        <Form.Subheader>Agent Details</Form.Subheader>
-        <Form.Stack spacing={2}>
-          <Form.ElementWrapper label="Name" name="displayName">
-            <TextField
-              slotProps={{ htmlInput: { maxLength: INPUT_LIMITS.NAME } }}
+      <Stack spacing={2}>
+        <Typography variant="subtitle1">Agent Details</Typography>
+        <Grid container spacing={2}>
+          <Grid size={{ xs: 12, md: 6, xl: 4 }}>
+            <TextInput
+              label="Name"
               id="displayName"
+              maxLength={INPUT_LIMITS.NAME}
+              hideCharacterCount={formData.displayName.length < INPUT_LIMITS.NAME}
               placeholder="e.g., Customer Support"
               value={formData.displayName}
               onChange={(e) => handleFieldChange('displayName', e.target.value)}
               error={!!errors.displayName}
               helperText={
                 isGeneratingName ? (
-                  <Stack direction="row" alignItems="center" gap={1}>
+                  <Stack component="span" direction="row" alignItems="center" gap={1}>
                     <CircularProgress size={12} />
                     <Typography variant="caption">Validating name...</Typography>
                   </Stack>
@@ -136,58 +142,42 @@ export const ExternalAgentForm = ({
                   errors.displayName
                 )
               }
-              fullWidth
             />
-          </Form.ElementWrapper>
-          <Form.ElementWrapper label="Description (optional)" name="description">
-            <MarkdownEditor
-              id="description"
-              placeholder="Short description of what this agent does. Markdown is supported."
-              value={formData.description || ''}
-              onChange={(value) => handleFieldChange('description', value)}
-              error={!!errors.description}
-              helperText={errors.description}
+          </Grid>
+          <Grid size={{ xs: 12, md: 6, xl: 4 }}>
+            <AgentHandleField
+              value={formData.name}
+              editable={isHandleEditable}
+              onEdit={() => setIsHandleEditable(true)}
+              onChange={(value) => handleFieldChange("name", value)}
+              error={errors.name}
             />
-          </Form.ElementWrapper>
-          <Form.ElementWrapper label="Labels (optional)" name="labels">
-            <LabelsEditor
-              hideTitle
-              description="Attach key/value labels to organize and filter agents."
-              value={formData.labels ?? {}}
-              onChange={(labels) => handleFieldChange("labels", labels)}
-            />
-          </Form.ElementWrapper>
-        </Form.Stack>
-      </Form.Section>
-      <Form.Section>
-        <Form.Subheader>Agent Type</Form.Subheader>
-        <Form.Stack spacing={2}>
-          <Box display="flex" flexDirection="row" gap={1}>
-            {EXTERNAL_SUBTYPE_OPTIONS.map((option) => {
-              const selected = (formData.externalSubType ?? "custom-api") === option.value;
-              return (
-                <Form.CardButton
-                  key={option.value}
-                  onClick={() => handleFieldChange("externalSubType", option.value)}
-                  selected={selected}
-                  sx={{ maxWidth: 500, flexGrow: 1 }}
-                >
-                  <Form.CardContent sx={{ height: "100%" }}>
-                    <Box display="flex" flexDirection="row" alignItems="center" height="100%" gap={1}>
-                      <Box>{selected ? <CheckCircle size={16} /> : <Circle size={16} />}</Box>
-                      <Divider orientation="vertical" flexItem />
-                      <Box>
-                        <Typography variant="h6">{option.label}</Typography>
-                        <Typography variant="caption">{option.description}</Typography>
-                      </Box>
-                    </Box>
-                  </Form.CardContent>
-                </Form.CardButton>
-              );
-            })}
-          </Box>
-        </Form.Stack>
-      </Form.Section>
+          </Grid>
+          <FormGridSpacer />
+          <Grid size={{ xs: 12, md: 12, xl: 8 }}>
+            <Form.ElementWrapper label="Description (optional)" name="description">
+              <MarkdownEditor
+                id="description"
+                placeholder="Short description of what this agent does. Markdown is supported."
+                value={formData.description || ''}
+                onChange={(value) => handleFieldChange('description', value)}
+                error={!!errors.description}
+                helperText={errors.description}
+              />
+            </Form.ElementWrapper>
+          </Grid>
+          <Grid size={{ xs: 12, md: 12, xl: 8 }}>
+            <Form.ElementWrapper label="Labels (optional)" name="labels">
+              <LabelsEditor
+                hideTitle
+                description="Attach key/value labels to organize and filter agents."
+                value={formData.labels ?? {}}
+                onChange={(labels) => handleFieldChange("labels", labels)}
+              />
+            </Form.ElementWrapper>
+          </Grid>
+        </Grid>
+      </Stack>
     </Form.Stack>
   );
 };

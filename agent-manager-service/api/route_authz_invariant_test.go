@@ -46,12 +46,13 @@ import (
 // permission check. Any other registration path leaves the route open to any
 // authenticated caller.
 var authzBearingRegistrars = map[string]bool{
-	"HandleFuncWithValidationAndAuthz":              true,
-	"HandleFuncWithValidationAndAuthzAllowRootOU":   true,
-	"HandleFuncWithValidationAndAnyAuthz":           true,
-	"HandleFuncWithValidationAndAllAuthz":           true,
-	"HandleFuncWithValidationAndDynamicAuthz":       true,
-	"HandleFuncWithValidationAndPlatformAdminAuthz": true,
+	"HandleFuncWithValidationAndAuthz":               true,
+	"HandleFuncWithValidationAndAuthzAllowRootOU":    true,
+	"HandleFuncWithValidationAndAuthzAndOrgOverride": true,
+	"HandleFuncWithValidationAndAnyAuthz":            true,
+	"HandleFuncWithValidationAndAllAuthz":            true,
+	"HandleFuncWithValidationAndDynamicAuthz":        true,
+	"HandleFuncWithValidationAndPlatformAdminAuthz":  true,
 }
 
 type routeRegistration struct {
@@ -84,6 +85,8 @@ var unguardedRouteAllowlist = map[routeKey]string{
 		"(no org data). Still org-resolved via RequireOrgMatch.",
 	{"RegisterMonitorPublisherRoutes", "HandleFuncWithValidation", "POST /publisher/monitors/{monitorId}/runs/{runId}/scores"}: "POST /publisher/.../scores is guarded by jwtassertion.PublisherClientAuthMiddleware, " +
 		"which requires an amp-publisher-* audience instead of an amp: scope.",
+	{"RegisterBuildPublisherRoutes", "HandleFuncWithValidation", "POST /build-publisher/builds/{buildName}/workload"}: "POST /build-publisher/.../workload is guarded by jwtassertion.BuildClientAuthMiddleware, " +
+		"which requires a build token (issued to this service's IDP_CLIENT_ID for the token's own ouId) instead of an amp: scope.",
 	{"RegisterWebSocketRoutes", "HandleFunc", "GET /ws/gateways/connect"}: "GET /ws/gateways/connect is on internalMux and authenticates the gateway with an " +
 		"api-key header verified in the handler (gatewayService.VerifyToken), not a user JWT.",
 	{"registerJWKSRoute", "HandleFunc", "GET /auth/external/jwks.json"}: "publishes public signing keys and must be unauthenticated.",
@@ -98,7 +101,7 @@ var unguardedRouteAllowlist = map[routeKey]string{
 	{"registerWellKnownRoutes", "HandleFunc", "GET /.well-known/oauth-protected-resource/mcp"}: "path-specific RFC 9728 metadata for the MCP resource must be unauthenticated " +
 		"so MCP clients can discover how to authenticate.",
 	{"registerConfigRoutes", "Handle", "/api/v1/config"}:       "public console/CLI discovery endpoint; exposes only the observer public URL.",
-	{"MakeHTTPHandler", "Handle", "/api/v1/"}:                  "mount point for the JWT-authenticated API sub-router, not a leaf endpoint.",
+	{"MakeHTTPHandlerWithPolicy", "Handle", "/api/v1/"}:        "mount point for the JWT-authenticated API sub-router, not a leaf endpoint.",
 	{"MakeInternalHTTPHandler", "HandleFunc", "/health"}:       "internal-listener liveness probe.",
 	{"MakeInternalHTTPHandler", "Handle", "/api/internal/v1/"}: "mount point for the separately exposed internal API sub-router.",
 	{"RegisterRoute", "Handle", "/mcp"}:                        "MCP endpoint wrapped by JWT authentication and MCP per-tool scope authorization.",
@@ -109,8 +112,11 @@ var gatewayInternalRoutes = []string{
 	"GET /llm-providers/api-keys",
 	"GET /llm-proxies/api-keys",
 	"GET /apis/api-keys",
+	"GET /apis/{apiId}",
 	"GET /subscription-plans",
 	"GET /deployments",
+	"POST /deployments/fetch-batch",
+	"POST /artifacts/exists",
 	"GET /applications",
 	"POST /gateways/{gatewayId}/manifest",
 	"GET /llm-providers/{providerId}",

@@ -33,8 +33,9 @@ import { globalConfig, absoluteRouteMap } from "@agent-management-platform/types
 import { LeftNavigation, combineNavItems, flattenWithChildren } from "./LeftNavigation";
 import { useNavigationItems } from "./navigationItems";
 import { TopNavigation } from "./TopNavigation";
-import { useGetUserProfile, useListOrganizations } from "@agent-management-platform/api-client";
+import { orgRouteId, useGetUserProfile, useListOrganizations } from "@agent-management-platform/api-client";
 import { MountPoints } from "../../types";
+import { useFeatureFlag } from "@agent-management-platform/feature-management";
 
 // Oxygen UI's UserMenu treats a non-URL `avatar` string as literal initials
 // text (see getUserMenuAvatarProps), so this doubles as the no-picture
@@ -51,6 +52,7 @@ export function OxygenLayout() {
   const { userInfo, logout } = useAuthHooks();
   const navigate = useNavigate();
   const { orgId } = useParams();
+  const profileManagementEnabled = useFeatureFlag("enableProfileManagement");
   const { data: userProfile } = useGetUserProfile({
     orgName: orgId || "default",
     userId: userInfo?.sub || "",
@@ -59,6 +61,8 @@ export function OxygenLayout() {
   const externalTopRightComponentModules =
     useExternalComponentModules(MountPoints.TopRightPanel);
   const externalLogoComponentModules = useExternalComponentModules(MountPoints.TopLogo);
+  const externalTopStartComponentModules =
+    useExternalComponentModules(MountPoints.TopStartPanel);
   const externalTopLeftComponentModules =
     useExternalComponentModules(MountPoints.TopLeftPanel);
   const externalBottomLeftComponentModules =
@@ -68,7 +72,7 @@ export function OxygenLayout() {
   const { data: organizations } = useListOrganizations();
   const homePath = useMemo(() => {
     return generatePath(absoluteRouteMap.children.org.path, {
-      orgId: organizations?.organizations?.[0]?.name ?? "",
+      orgId: orgRouteId(organizations?.organizations?.[0]) ?? "",
     });
   }, [organizations]);
 
@@ -82,7 +86,10 @@ export function OxygenLayout() {
     secondaryLine: userInfo?.orgName ?? userInfo?.email ?? userInfo?.username ?? userInfo?.givenName ?? "",
   };
 
-  const avatar = userProfile?.attributes?.picture || getUserAvatarInitials(user.primaryLine);
+  // UserMenu takes an image URL or initials as a string; profile attributes are untyped.
+  const picture = userProfile?.attributes?.picture;
+  const avatar =
+    (typeof picture === "string" && picture) || getUserAvatarInitials(user.primaryLine);
 
   const navigationItems = useNavigationItems();
   const mainItems = navigationItems.filter((item) => item.type === "item");
@@ -104,10 +111,11 @@ export function OxygenLayout() {
       <AppShell>
         <AppShell.Navbar>
           <Header>
-            <Header.Toggle
-              collapsed={collapsed}
-              onToggle={() => setCollapsed(!collapsed)}
-            />
+            {externalTopStartComponentModules?.map((module) => (
+              <div key={module.moduleName}>
+                <module.component />
+              </div>
+            ))}
             <Header.Brand onClick={() => navigate(homePath)}>
               <Header.BrandLogo>
                 {externalLogoComponentModules && externalLogoComponentModules.length > 0 ? (
@@ -149,10 +157,10 @@ export function OxygenLayout() {
                   avatar={avatar}
                 />
                 <UserMenu.Divider />
-                {orgId && (
+                {orgId && profileManagementEnabled && (
                   <UserMenu.Item
                     icon={<Settings />}
-                    label="Profile Settings"
+                    label="Profile settings"
                     onClick={() => setProfileOpen(true)}
                   />
                 )}
@@ -165,6 +173,7 @@ export function OxygenLayout() {
         <AppShell.Sidebar>
           <LeftNavigation
             collapsed={collapsed}
+            onToggleCollapse={() => setCollapsed((prev) => !prev)}
             activeItem={activeItem}
             mainItems={mainItems}
             groupedItems={groupedItems}
@@ -207,6 +216,9 @@ export function OxygenLayout() {
 
             {globalConfig.docsUrl && (
               <Footer.Link href={globalConfig.docsUrl + "/get-started/what-is-amp/"} target="_blank" rel="noopener noreferrer">Documentation</Footer.Link>
+            )}
+            {globalConfig.footerLinks?.supportUrl && (
+              <Footer.Link href={globalConfig.footerLinks.supportUrl} target="_blank" rel="noopener noreferrer">Support</Footer.Link>
             )}
             {globalConfig.footerLinks?.termsOfUseUrl && (
               <Footer.Link href={globalConfig.footerLinks.termsOfUseUrl} target="_blank" rel="noopener noreferrer">Terms of Use</Footer.Link>

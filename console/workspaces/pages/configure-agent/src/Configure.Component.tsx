@@ -18,7 +18,7 @@
 import React, { useMemo, useState } from "react";
 import { generatePath, useParams, useSearchParams } from "react-router-dom";
 import { Box, Card, Divider, Tab, Tabs } from "@wso2/oxygen-ui";
-import { PageLayout } from "@agent-management-platform/views";
+import { isExternalAgent, PageLayout, servesA2A } from "@agent-management-platform/views";
 import {
   BUILD_IN_PROGRESS_REASON,
   useHasBuildInProgress,
@@ -43,6 +43,7 @@ import {
 } from "./Configure/subComponents/AgentConfigTableSection";
 import { AddMCPToolConfigPanel } from "./Configure/subComponents/AddMCPToolConfigPanel";
 import { A2AConfigureTab } from "./Configure/subComponents/A2AConfigureTab";
+import { useResourceAccess } from "@agent-management-platform/feature-management";
 import {
   CONFIGURE_TAB_KEYS,
   CONFIGURE_TAB_PARAM,
@@ -55,8 +56,8 @@ const configureRoutes =
 
 const llmLabels: AgentConfigTableLabels = {
   title: "LLM Configurations",
-  searchPlaceholder: "Search LLM configurations...",
-  addButtonLabel: "Add LLM Configuration",
+  searchPlaceholder: "Search LLM configurations",
+  addButtonLabel: "Add LLM configuration",
   emptyTitle: "No LLM configurations added yet",
   emptyDescription:
     "Click Add LLM Configuration to connect a service provider.",
@@ -74,8 +75,8 @@ const llmLabels: AgentConfigTableLabels = {
 
 const mcpLabels: AgentConfigTableLabels = {
   title: "Tool Configurations",
-  searchPlaceholder: "Search by name or description...",
-  addButtonLabel: "Add Tool Configuration",
+  searchPlaceholder: "Search by name or description",
+  addButtonLabel: "Add tool configuration",
   emptyTitle: "No tool configurations added yet",
   emptyDescription: "Add tool configurations that this agent can use.",
   errorTitle: "Failed to load tool configurations",
@@ -132,6 +133,7 @@ export const ConfigureComponent: React.FC = () => {
   };
 
   const [isAddingMcp, setIsAddingMcp] = useState(false);
+  const { canWrite } = useResourceAccess("agent");
   const { orgId, projectId, agentId } = useParams<{
     orgId: string;
     projectId: string;
@@ -177,8 +179,8 @@ export const ConfigureComponent: React.FC = () => {
     projName: projectId,
     agentName: agentId,
   });
-  const isA2AAgent = agent?.agentType?.subType === "a2a-agent";
-  const isExternal = agent?.provisioning?.type === "external";
+  const isA2AAgent = servesA2A(agent);
+  const isExternal = isExternalAgent(agent);
   const visibleTabKeys = CONFIGURE_TAB_KEYS.filter(
     (key) => key !== "a2a" || isA2AAgent,
   );
@@ -311,13 +313,15 @@ export const ConfigureComponent: React.FC = () => {
             }
           />
           {/* Single right-side drawer overlay; does not shrink the table. */}
-          <AddMCPToolConfigPanel
-            open={isAddingMcp}
-            orgId={orgId}
-            projectId={projectId}
-            agentId={agentId}
-            onClose={() => setIsAddingMcp(false)}
-          />
+          {canWrite && (
+            <AddMCPToolConfigPanel
+              open={isAddingMcp}
+              orgId={orgId}
+              projectId={projectId}
+              agentId={agentId}
+              onClose={() => setIsAddingMcp(false)}
+            />
+          )}
         </TabPanel>
 
         {isA2AAgent && orgId && projectId && agentId && (

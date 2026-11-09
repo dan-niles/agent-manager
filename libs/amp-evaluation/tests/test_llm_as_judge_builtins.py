@@ -57,6 +57,7 @@ from amp_evaluation.evaluators.builtin.llm_judge import (  # noqa: E402
 )
 from amp_evaluation.evaluators.params import EvaluationLevel, EvalMode  # noqa: E402
 from amp_evaluation.models import EvalResult  # noqa: E402
+from amp_evaluation.trace.parser import _parse_llm_response, _parse_tool_calls_from_output  # noqa: E402
 from amp_evaluation.trace.models import (  # noqa: E402
     AgentMetrics,
     AgentSpan,
@@ -70,6 +71,7 @@ from amp_evaluation.trace.models import (  # noqa: E402
     RetrieverSpan,
     SystemMessage,
     TokenUsage,
+    ToolCall,
     ToolMetrics,
     ToolSpan,
     Trace,
@@ -366,6 +368,34 @@ class TestTraceLevel:
         prompt = ev.build_prompt(trace, task)
         assert "Must cover all 3 points" in prompt
 
+    def test_helpfulness_prompt_formats_list_success_criteria(self):
+        ev = HelpfulnessEvaluator()
+        trace = _make_trace()
+        task = Task(
+            task_id="t1",
+            name="test",
+            description="test",
+            input="test",
+            success_criteria=["Must be actionable", "Must include examples"],
+        )
+        prompt = ev.build_prompt(trace, task)
+        assert "Additional success criteria:\n- Must be actionable\n- Must include examples" in prompt
+        assert "['Must be actionable'" not in prompt
+
+    def test_completeness_prompt_formats_list_success_criteria(self):
+        ev = CompletenessEvaluator()
+        trace = _make_trace()
+        task = Task(
+            task_id="t1",
+            name="test",
+            description="test",
+            input="test",
+            success_criteria=["Cover pros", "Cover cons"],
+        )
+        prompt = ev.build_prompt(trace, task)
+        assert "Expected coverage:\n- Cover pros\n- Cover cons" in prompt
+        assert "['Cover pros'" not in prompt
+
     def test_builtin_factory_with_model_override(self):
         ev = builtin("helpfulness", model="gpt-4o")
         assert ev.model == "gpt-4o"
@@ -461,6 +491,34 @@ class TestLLMSpanLevel:
         llm_span = _make_llm_span()
         prompt = ev.build_prompt(llm_span)
         assert "medical advice" in prompt
+
+    def test_tone_skips_tool_only_call(self):
+        """Test a call whose output is only the tool-call summary is skipped."""
+        ev = _mock_llm(ToneEvaluator())
+        llm_span = _make_llm_span(response='[tool_call: get_weather({"city": "Colombo"})]')
+        llm_span._tool_calls = [ToolCall(id="1", name="get_weather", arguments={"city": "Colombo"})]
+        result = ev.evaluate(llm_span)
+        assert result.is_skipped is True
+
+    def test_tone_skips_tool_only_dict_output(self):
+        """Test a tool-only message dict, parsed by the trace parser, is skipped."""
+        ev = _mock_llm(ToneEvaluator())
+        raw = {"role": "assistant", "content": None, "tool_calls": [{"id": "1", "name": "get_weather"}]}
+        llm_span = LLMSpan(
+            span_id="llm-1",
+            output=_parse_llm_response(raw),
+            _tool_calls=_parse_tool_calls_from_output(raw),
+        )
+        result = ev.evaluate(llm_span)
+        assert result.is_skipped is True
+
+    def test_tone_judges_text_alongside_tool_call(self):
+        """Test a call with reply text and a tool call is still judged."""
+        ev = _mock_llm(ToneEvaluator())
+        llm_span = _make_llm_span(response="Let me check the weather for you.")
+        llm_span._tool_calls = [ToolCall(id="1", name="get_weather", arguments={"city": "Colombo"})]
+        result = ev.evaluate(llm_span)
+        assert result.score == 0.9
 
 
 # ============================================================================
@@ -576,6 +634,7 @@ class TestInstructionFollowing:
         assert "Must be under 100 words" in prompt
         assert "Must include examples" in prompt
         assert "Answer geography questions" in prompt
+        assert "  Success criteria:\n  - Must be under 100 words\n  - Must include examples" in prompt
 
     def test_no_on_missing_context_param(self):
         """No on_missing_context param — evaluator always runs."""

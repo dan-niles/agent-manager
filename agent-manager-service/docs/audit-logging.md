@@ -320,6 +320,8 @@ The operations below emit a record describing what actually changed, not just th
 | Users | `user:invite` / `:create` / `:delete` | Fail-closed |
 | Agent lifecycle | `agent:deploy`, `agent:promote`, `agent:change-deployment-state`, `agent:delete`, `project:delete` | Fail-closed |
 | Agent lifecycle | `agent:build` | Fail-open |
+| Builds | `build-workload:publish` (a build's workload step, through the build publisher endpoint; service actor: the client its build token was issued to, `IDP_CLIENT_ID`) | Fail-closed |
+| Build token | `build-token:issue` (organization-scoped access token a build uses to call the build publisher endpoint, obtained with `IDP_CLIENT_ID` and stored in the secret store) | Fail-closed |
 | Gateways | `gateway:delete`, `gateway:set-identity-provider`, `gateway:remove-identity-provider` | Fail-closed |
 | Gateways | `gateway:create` / `:update` / `:assign-environment` / `:unassign-environment` | Fail-open |
 | Internal | `gateway:push-manifest`, `api-key:sync` (bulk sync, coalesced per gateway) | Fail-open |
@@ -369,9 +371,19 @@ The registry is the source of truth (`audit/actions.go`, `audit/actions_domain.g
 | `api-key:rotate` | credential | 4 critical | `expiresAt`, `gatewayConnected`, `gatewayCount`, `keyName`, `ownerName`, `ownerType` |
 | `api-key:sync` | read | 2 notice | `keyCount` |
 | `authn:failure` | authn | 3 warning | `authHeader`, `reason` |
-| `authz:deny` | authz | 3 warning | `grantedScopes`, `missingScope`, `reason` |
+| `authz:deny` | authz | 3 warning | `grantedScopes`, `imageId`, `missingScope`, `reason` |
 | `authz:root-ou-bypass` | authz | 4 critical | `rootOUBypass` |
+| `build-token:issue` | credential | 4 critical | `clientId` |
+| `build-workload:publish` | deployment | 2 notice | `agentName`, `buildName`, `imageId` |
 | `environment:read` | read | 1 info | — |
+| `event-destination:create` | credential | 4 critical | `availability`, `destination`, `kind`, `projects` |
+| `event-destination:delete` | credential | 4 critical | `availability`, `destination`, `kind`, `projects` |
+| `event-destination:rotate-secret` | credential | 4 critical | `availability`, `destination`, `kind`, `projects` |
+| `event-destination:test` | config | 2 notice | — |
+| `event-destination:update` | credential | 4 critical | `availability`, `destination`, `kind`, `projects` |
+| `event-subscription:create` | config | 2 notice | `allEvents`, `destinationId`, `enabled`, `environments`, `eventCount`, `scope` |
+| `event-subscription:delete` | config | 2 notice | `allEvents`, `destinationId`, `enabled`, `environments`, `eventCount`, `scope` |
+| `event-subscription:update` | config | 2 notice | `allEvents`, `destinationId`, `enabled`, `environments`, `eventCount`, `scope` |
 | `gateway-token:revoke` | credential | 4 critical | `gatewayName`, `tokenId` |
 | `gateway-token:rotate` | credential | 4 critical | `expiresAt`, `gatewayName`, `tokenId` |
 | `gateway:assign-environment` | config | 2 notice | `environment`, `gatewayName`, `gatewayType`, `vhost` |
@@ -1309,7 +1321,7 @@ REST edge. The internal gateway server records its own (`controllers/gateway_int
 <details>
 <summary><code>authz:deny</code> — Record · `middleware/authorization.go:51`</summary>
 
-REST scope denial. MCP denials (`mcp/tools/authz.go`) carry `tool` and no `grantedScopes`; environment-tier denials (`requireEnvTier`) carry reason `missing-environment-tier-scope`.
+REST scope denial. MCP denials (`mcp/tools/authz.go`) carry `tool` and no `grantedScopes`; environment-tier denials (`requireEnvTier`) carry reason `missing-environment-tier-scope`. Deploys of an image the agent does not own (`requireImageOwnedByAgent`) carry reason `image-not-owned-by-agent` and the rejected `imageId`.
 
 ```json
 {

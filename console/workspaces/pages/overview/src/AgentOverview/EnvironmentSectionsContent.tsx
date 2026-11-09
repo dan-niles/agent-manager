@@ -25,6 +25,7 @@ import { EnvConfigsSection } from "./EnvConfigsSection";
 import { EnvMonitorsSection } from "./EnvMonitorsSection";
 import { EnvObservabilitySection } from "./EnvObservabilitySection";
 import { Divider, Grid } from "@wso2/oxygen-ui";
+import { useFeatureFlag } from "@agent-management-platform/feature-management";
 
 interface EnvironmentSectionsContentProps {
     orgId: string;
@@ -46,6 +47,8 @@ interface EnvironmentSectionsContentProps {
 export function EnvironmentSectionsContent({
     orgId, projectId, agentId, envId, external, deploymentStatus,
 }: EnvironmentSectionsContentProps) {
+    const agentIdEnabled = useFeatureFlag("enableAgentIdentity");
+
     return (
         <>
             <Divider sx={{ my: 1.5, mt: 0 }} />
@@ -68,15 +71,17 @@ export function EnvironmentSectionsContent({
                 {/* EnvAgentInterfaceCard renders nothing for external agents
                     (they aren't deployed through this platform), so Agent ID
                     takes the full row instead of leaving an empty half. */}
-                <Grid size={{ xs: 12, md: external ? 12 : 6 }}>
-                    <EnvAgentRolesGroupsSection
-                        orgId={orgId}
-                        projectId={projectId}
-                        agentId={agentId}
-                        envId={envId}
-                    />
-                </Grid>
-                <Grid size={{ xs: 12, md: 6 }}>
+                {agentIdEnabled && (
+                    <Grid size={{ xs: 12, md: external ? 12 : 6 }}>
+                        <EnvAgentRolesGroupsSection
+                            orgId={orgId}
+                            projectId={projectId}
+                            agentId={agentId}
+                            envId={envId}
+                        />
+                    </Grid>
+                )}
+                <Grid size={{ xs: 12, md: agentIdEnabled ? 6 : 12 }}>
                     <EnvAgentInterfaceCard
                         orgId={orgId}
                         projectId={projectId}

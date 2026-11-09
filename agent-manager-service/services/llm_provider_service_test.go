@@ -115,7 +115,7 @@ func TestLLMProviderService_ListAvailableLLMPolicies_ScopesToProviderDeployment(
 		},
 	}
 	deploymentRepo := &repomocks.DeploymentRepositoryMock{
-		GetDeployedGatewaysByProviderFunc: func(artifactUUID uuid.UUID, orgUUID string) ([]string, error) {
+		PlacedGatewaysFunc: func(_ context.Context, orgUUID string, artifactUUID uuid.UUID) ([]string, error) {
 			assert.Equal(t, providerUUID, artifactUUID)
 			return []string{"gw-1"}, nil
 		},
@@ -280,7 +280,7 @@ func TestLLMProviderService_UpdateAndSync_RejectsPlacementInvalidGatewayWithoutU
 		},
 	}
 	deploymentRepo := &repomocks.DeploymentRepositoryMock{
-		GetDeployedGatewaysByProviderFunc: func(_ uuid.UUID, _ string) ([]string, error) {
+		PlacedGatewaysFunc: func(_ context.Context, _ string, _ uuid.UUID) ([]string, error) {
 			return []string{gatewayA.String()}, nil
 		},
 	}
@@ -307,4 +307,40 @@ func TestLLMProviderService_UpdateAndSync_RejectsPlacementInvalidGatewayWithoutU
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, utils.ErrInvalidInput), "expected error to wrap utils.ErrInvalidInput, got: %v", err)
 	assert.False(t, undeployPathReached, "UpdateAndSync must not attempt to deploy/undeploy any gateway once placement validation hard-fails")
+}
+
+// A guardrail save re-sends the gateways the provider is already on. When every redeploy fails, the provider update is
+// already saved, so the error says so through ErrAllGatewayDeploymentsFailed for callers to report it as saved.
+func TestLLMProviderService_UpdateAndSync_AllRedeploysFailedAfterSave(t *testing.T) {
+	gatewayA := uuid.New()
+	providerUUID := uuid.New()
+
+	updated := false
+	outerProviderRepo := &repomocks.LLMProviderRepositoryMock{
+		GetByUUIDFunc: func(id, _ string) (*models.LLMProvider, error) {
+			return &models.LLMProvider{UUID: uuid.MustParse(id)}, nil
+		},
+		UpdateFunc: func(_ context.Context, _ *models.LLMProvider, _, _ string) error {
+			updated = true
+			return nil
+		},
+	}
+	deploymentRepo := &repomocks.DeploymentRepositoryMock{
+		PlacedGatewaysFunc: func(_ context.Context, _ string, _ uuid.UUID) ([]string, error) {
+			return []string{gatewayA.String()}, nil
+		},
+	}
+	deploymentSvc := &LLMProviderDeploymentService{
+		deploymentRepo: deploymentRepo,
+		gatewayRepo: &repomocks.GatewayRepositoryMock{
+			GetByUUIDFunc: func(string) (*models.Gateway, error) { return nil, errors.New("gateway unreachable") },
+		},
+	}
+	svc := &LLMProviderService{providerRepo: outerProviderRepo, gatewayRepo: &repomocks.GatewayRepositoryMock{}}
+
+	_, err := svc.UpdateAndSync(context.Background(), providerUUID.String(), "org",
+		&models.LLMProvider{}, []string{gatewayA.String()}, deploymentSvc)
+
+	require.ErrorIs(t, err, ErrAllGatewayDeploymentsFailed)
+	assert.True(t, updated, "the provider is saved before the redeploys run")
 }

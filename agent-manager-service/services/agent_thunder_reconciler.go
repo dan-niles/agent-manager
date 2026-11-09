@@ -35,6 +35,10 @@ const (
 	reconcilerLockID           = int64(739281457)
 	reconcilerBatchSize        = 50
 	reconcilerConcurrencyLimit = 10
+	promotionTopologyInterval  = 5 * time.Minute
+	// promotionReconcilerLockID serializes the project promotion topology pass
+	// across replicas; distinct from reconcilerLockID and schedulerLockID.
+	promotionReconcilerLockID = int64(739281458)
 )
 
 // AgentThunderReconcilerService sweeps PENDING agent Thunder bindings whose
@@ -83,8 +87,56 @@ func (s *agentThunderReconcilerService) Start(ctx context.Context) error {
 	// retry cycle below.
 	go s.runInitialIdentityInjectionBackfill(ctx)
 	go s.runLoop(ctx)
+	if _, ok := s.provisioning.(ProjectAgentIdentityPromotionReconciler); ok {
+		go s.runPromotionTopologyLoop(ctx)
+	}
 	s.logger.Info("Agent thunder provisioning reconciler started")
 	return nil
+}
+
+func (s *agentThunderReconcilerService) runPromotionTopologyLoop(ctx context.Context) {
+	reconciler := s.provisioning.(ProjectAgentIdentityPromotionReconciler)
+	s.runPromotionTopologyCycle(ctx, reconciler)
+	ticker := time.NewTicker(promotionTopologyInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			s.runPromotionTopologyCycle(ctx, reconciler)
+		case <-s.stopCh:
+			return
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
+// runPromotionTopologyCycle runs one topology pass under a PostgreSQL advisory
+// lock so only one replica backfills promotion bindings at a time, the same
+// mechanism runCycle uses. The pass is idempotent, so the lock only avoids
+// redundant pipeline reads: a replica that does not get it just skips the pass.
+func (s *agentThunderReconcilerService) runPromotionTopologyCycle(
+	ctx context.Context, reconciler ProjectAgentIdentityPromotionReconciler,
+) {
+	tx := db.GetDB().WithContext(ctx).Begin()
+	if tx.Error != nil {
+		s.logger.Error("Failed to begin transaction for promotion topology advisory lock", "error", tx.Error)
+		return
+	}
+	// The transaction-scoped lock is released by the rollback; the pass itself
+	// uses its own connections and writes nothing through tx.
+	defer tx.Rollback()
+
+	var locked bool
+	if err := tx.Raw("SELECT pg_try_advisory_xact_lock(?)", promotionReconcilerLockID).Scan(&locked).Error; err != nil {
+		s.logger.Error("Failed to try promotion topology advisory lock", "error", err)
+		return
+	}
+	if !locked {
+		s.logger.Debug("Another instance is reconciling project AgentID promotions, skipping pass")
+		return
+	}
+	reconciler.ReconcileProjectAgentIdentityPromotions(ctx)
 }
 
 func (s *agentThunderReconcilerService) Stop() error {
@@ -194,7 +246,7 @@ const identityInjectionReconcileWindow = 2 * time.Hour
 // lock; concurrent instances converge on the same desired state, so the worst
 // case is a duplicate content-identical write.
 func (s *agentThunderReconcilerService) runIdentityInjectionReconcile(ctx context.Context) {
-	s.pageIdentityInjectionReconcile(ctx, time.Now().Add(-identityInjectionReconcileWindow), false)
+	s.pageIdentityInjectionReconcile(ctx, time.Now().Add(-identityInjectionReconcileWindow))
 }
 
 // runInitialIdentityInjectionBackfill runs once per process start (see Start)
@@ -217,7 +269,7 @@ func (s *agentThunderReconcilerService) runIdentityInjectionReconcile(ctx contex
 // on every one-minute tick forever, not just once (or a few times) per
 // restart.
 func (s *agentThunderReconcilerService) runInitialIdentityInjectionBackfill(ctx context.Context) {
-	s.pageIdentityInjectionReconcile(ctx, time.Time{}, true)
+	s.pageIdentityInjectionReconcile(ctx, time.Time{})
 }
 
 // pageIdentityInjectionReconcile reconciles every COMPLETED internal binding
@@ -229,13 +281,7 @@ func (s *agentThunderReconcilerService) runInitialIdentityInjectionBackfill(ctx 
 // newest ones — the same oldest page would be reselected every call until
 // enough of them aged out of the (periodic caller's) window, and a newer
 // binding could miss its entire window without ever being reconciled.
-//
-// healSecretRefs is true only for the unbounded startup pass
-// (runInitialIdentityInjectionBackfill): HealSecretRef is cheap (one bounded
-// OpenChoreo read) and idempotent (a no-op once a binding's SecretRefPath
-// already matches), but there is no reason to re-run it against every
-// already-healed row on every one-minute periodic tick too.
-func (s *agentThunderReconcilerService) pageIdentityInjectionReconcile(ctx context.Context, createdAfter time.Time, healSecretRefs bool) {
+func (s *agentThunderReconcilerService) pageIdentityInjectionReconcile(ctx context.Context, createdAfter time.Time) {
 	var cursor *repositories.ReconcileCursor
 	for {
 		recent, err := s.repo.FindRecentlyCompletedInternal(ctx, createdAfter, cursor, reconcilerBatchSize)
@@ -245,11 +291,6 @@ func (s *agentThunderReconcilerService) pageIdentityInjectionReconcile(ctx conte
 		}
 		for _, binding := range recent {
 			bindingCtx := agentThunderBindingOrgContext(ctx, binding)
-			if healSecretRefs {
-				if err := s.provisioning.HealSecretRef(bindingCtx, binding); err != nil {
-					s.logger.Warn("Failed to heal agent thunder binding secret ref", "ouID", binding.OUID, "bindingID", binding.ID, "agentName", binding.AgentName, "envName", binding.EnvironmentName, "error", err)
-				}
-			}
 			reconcileWorkloadInjection(bindingCtx, s.injector, binding, s.logger)
 		}
 		if len(recent) < reconcilerBatchSize {

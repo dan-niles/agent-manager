@@ -84,6 +84,8 @@ export function BuildPanel({
       owner: repoInfo?.owner || "",
       repo: repoInfo?.repo || "",
       branch: selectedBranch || undefined,
+      projectName: projName,
+      componentName: agentName,
       // Include secretRef for private repo support; the org that scopes it comes
       // from the URL/token, not the body.
       ...(secretRef ? { secretRef: secretRef } : {}),
@@ -234,7 +236,7 @@ export function BuildPanel({
             startIcon={<Wrench size={16} />}
             disabled={isPending || isLoadingAgent || !selectedBranch}
           >
-            Trigger Build
+            Trigger build
           </Button>
         </Box>
       </DrawerContent>

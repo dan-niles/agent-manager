@@ -55,6 +55,19 @@ const (
 	ActionThunderURLSet    Action = "thunder-url:set"
 	ActionThunderURLDelete Action = "thunder-url:delete"
 
+	// An event destination decides where event data leaves the platform and
+	// may hold a secret (a webhook's signing secret, a service URL's token).
+	ActionEventDestinationCreate       Action = "event-destination:create"
+	ActionEventDestinationUpdate       Action = "event-destination:update"
+	ActionEventDestinationDelete       Action = "event-destination:delete"
+	ActionEventDestinationRotateSecret Action = "event-destination:rotate-secret"
+	ActionEventDestinationTest         Action = "event-destination:test"
+
+	// An event subscription decides which events are sent to a destination.
+	ActionEventSubscriptionCreate Action = "event-subscription:create"
+	ActionEventSubscriptionUpdate Action = "event-subscription:update"
+	ActionEventSubscriptionDelete Action = "event-subscription:delete"
+
 	// Identity and privilege. These are the escalation path: a record that says
 	// only "a role was updated" is useless, so each names what actually changed.
 	ActionRoleGrantPermission  Action = "role:grant-permission"
@@ -77,6 +90,16 @@ const (
 	ActionProjectRead     Action = "project:read"
 	ActionEnvironmentRead Action = "environment:read"
 
+	// Connections: LLM providers and MCP proxies. Each equals the action the
+	// REST route for the same operation derives from its gating permission.
+	ActionLLMProviderRead   Action = "llm-provider:read"
+	ActionLLMProviderUpdate Action = "llm-provider:update"
+	ActionMCPServerRead     Action = "mcp-server:read"
+
+	// Binding a model or MCP config to an agent; the REST routes are gated by
+	// agent:update alone, so that is the action they derive.
+	ActionAgentUpdate Action = "agent:update"
+
 	// Agent lifecycle.
 	ActionAgentCreate                Action = "agent:create"
 	ActionProjectCreate              Action = "project:create"
@@ -91,11 +114,11 @@ const (
 	ActionAgentConfigUpdate Action = "agent-config:update"
 	ActionAgentConfigDelete Action = "agent-config:delete"
 
-	// A2A agent card source (external A2A agents).
+	// A2A agent card source (external agents).
 	ActionAgentSetCardSource    Action = "agent:set-card-source"
 	ActionAgentRemoveCardSource Action = "agent:remove-card-source"
 
-	// A2A proxy (external A2A agents published through the ingress gateway).
+	// A2A proxy (external agents published through the ingress gateway).
 	ActionAgentSetA2AProxy    Action = "agent:set-a2a-proxy"
 	ActionAgentRemoveA2AProxy Action = "agent:remove-a2a-proxy"
 
@@ -109,8 +132,19 @@ const (
 	ActionGatewayRemoveIdentityProvider Action = "gateway:remove-identity-provider"
 	ActionGatewayPushManifest           Action = "gateway:push-manifest"
 
+	// A gateway's startup sync: fetching its deployments, secrets resolved, and
+	// asking which artifacts still exist.
+	ActionDeploymentSync      Action = "deployment:sync"
+	ActionArtifactCheckExists Action = "artifact:check-exists"
+
 	// Score publishing by the evaluation job.
 	ActionMonitorScorePublish Action = "monitor-score:publish"
+
+	// A source build's workload step publishing the Workload it generated, through
+	// the build publisher endpoint, and the organization-scoped build token that
+	// authorizes it.
+	ActionBuildWorkloadPublish Action = "build-workload:publish"
+	ActionBuildTokenIssue      Action = "build-token:issue"
 
 	// Monitors: scheduled evaluations that read agent traces and call an LLM
 	// judge, so starting or rerunning one spends money and reads data.
@@ -136,23 +170,27 @@ const (
 	APIKeyOwnerLLMProxy    = "llm-proxy"
 	APIKeyOwnerModelConfig = "model-config"
 	APIKeyOwnerMCPConfig   = "mcp-config"
+	APIKeyOwnerMCPProxy    = "mcp-proxy"
 )
 
 // Resource type names used in records. Kept as constants so a query written
 // against one emit site matches every other.
 const (
-	ResourceAPIKey         = "api-key"
-	ResourceGitSecret      = "git-secret"
-	ResourceGateway        = "gateway"
-	ResourceGatewayToken   = "gateway-token"
-	ResourceAgent          = "agent"
-	ResourceRole           = "role"
-	ResourceGroup          = "group"
-	ResourceUser           = "user"
-	ResourceAgentIdentity  = "agent-identity"
-	ResourceEnvironment    = "environment"
-	ResourceServiceAccount = "service-account"
-	ResourceThunderURL     = "thunder-url"
+	ResourceAPIKey            = "api-key"
+	ResourceGitSecret         = "git-secret"
+	ResourceGateway           = "gateway"
+	ResourceGatewayToken      = "gateway-token"
+	ResourceAgent             = "agent"
+	ResourceRole              = "role"
+	ResourceGroup             = "group"
+	ResourceUser              = "user"
+	ResourceAgentIdentity     = "agent-identity"
+	ResourceEnvironment       = "environment"
+	ResourceServiceAccount    = "service-account"
+	ResourceThunderURL        = "thunder-url"
+	ResourceEventDestination  = "event-destination"
+	ResourceEventSubscription = "event-subscription"
+	ResourceBuildToken        = "build-token"
 )
 
 // class, severity and permitted detail keys next to the action itself keeps the
@@ -254,6 +292,40 @@ func init() {
 	registerCredential(ActionServiceAccountRemove, map[string]FieldKind{
 		"environment": KindName,
 	})
+
+	// A destination is recorded as scheme and host only, since a URL path is
+	// often a credential. Secrets never reach the record.
+	eventDestinationFields := map[string]FieldKind{
+		"kind":         KindEnum,
+		"destination":  KindURL,
+		"availability": KindEnum,
+		"projects":     KindNameList,
+	}
+	registerCredential(ActionEventDestinationCreate, eventDestinationFields)
+	registerCredential(ActionEventDestinationUpdate, eventDestinationFields)
+	registerCredential(ActionEventDestinationDelete, eventDestinationFields)
+	registerCredential(ActionEventDestinationRotateSecret, eventDestinationFields)
+	// A test send changes nothing, but it does send a request to the
+	// configured destination, so it is recorded above info.
+	Register(ActionEventDestinationTest, ClassConfig, SeverityNotice)
+	RegisterDetailSchema(ActionEventDestinationTest, nil)
+
+	// A subscription holds no credential, but it decides which event data
+	// reaches a destination outside the platform.
+	eventSubscriptionFields := map[string]FieldKind{
+		"scope":         KindEnum,
+		"destinationId": KindIdentifier,
+		"eventCount":    KindCount,
+		"allEvents":     KindFlag,
+		"environments":  KindNameList,
+		"enabled":       KindFlag,
+	}
+	for _, action := range []Action{
+		ActionEventSubscriptionCreate, ActionEventSubscriptionUpdate, ActionEventSubscriptionDelete,
+	} {
+		Register(action, ClassConfig, SeverityNotice)
+		RegisterDetailSchema(action, eventSubscriptionFields)
+	}
 
 	// Identity and privilege changes. Critical for the same reason credential
 	// changes are: they decide who can do what.
@@ -463,6 +535,13 @@ func init() {
 		"policyCount": KindCount,
 	})
 
+	// A read of deployment content that carries upstream secrets, so a notice
+	// like ActionAPIKeySync. Runs once per gateway process start.
+	Register(ActionDeploymentSync, ClassRead, SeverityNotice)
+	RegisterDetailSchema(ActionDeploymentSync, map[string]FieldKind{})
+	Register(ActionArtifactCheckExists, ClassRead, SeverityInfo)
+	RegisterDetailSchema(ActionArtifactCheckExists, map[string]FieldKind{})
+
 	// The evaluation job publishing monitor scores. This route carries no RBAC
 	// permission at all, so its record is the only account of who wrote scores.
 	Register(ActionMonitorScorePublish, ClassConfig, SeverityInfo)
@@ -470,6 +549,22 @@ func init() {
 		"monitorId":  KindIdentifier,
 		"runId":      KindIdentifier,
 		"scoreCount": KindCount,
+	})
+
+	// A build's workload step publishing what it built. Like the score route, this
+	// one carries no RBAC permission: an organization-scoped build token (issued to
+	// IDP_CLIENT_ID) authorizes it, so its record is the only account of which
+	// build changed the agent's first environment, and to which image.
+	Register(ActionBuildWorkloadPublish, ClassDeployment, SeverityNotice)
+	RegisterDetailSchema(ActionBuildWorkloadPublish, map[string]FieldKind{
+		"agentName": KindName,
+		"buildName": KindName,
+		"imageId":   KindIdentifier,
+	})
+	// Issuing a build token hands a live access token for an organization to a
+	// build, so it is recorded fail-closed like any other credential.
+	registerCredential(ActionBuildTokenIssue, map[string]FieldKind{
+		"clientId": KindIdentifier,
 	})
 
 	// The provisioning reconciler issues real credentials with no request

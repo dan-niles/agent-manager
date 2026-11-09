@@ -180,7 +180,11 @@ func TestAgentIdentityInjection_InjectForEnvironment_RemovesOtherNameSetInSameWr
 func liveIdentityEnvVars(keys []string) []models.EnvVars {
 	vars := make([]models.EnvVars, 0, len(keys))
 	for _, k := range keys {
-		vars = append(vars, models.EnvVars{Key: k, Value: ""})
+		ev := models.EnvVars{Key: k}
+		if plainAgentIdentityEnvVarName(k) != client.EnvVarAgentIDScopes {
+			ev.Value = "live"
+		}
+		vars = append(vars, ev)
 	}
 	return vars
 }

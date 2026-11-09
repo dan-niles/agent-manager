@@ -29,6 +29,10 @@ type MCPProxy struct {
 	CreatedBy     string         `gorm:"column:created_by" json:"createdBy,omitempty"`
 	Status        string         `gorm:"column:status" json:"status"`
 	Configuration MCPProxyConfig `gorm:"column:configuration;type:jsonb;serializer:json" json:"configuration"`
+	// ProjectUUID and ProjectName are set together for a project-scoped proxy and
+	// are both nil for an organization-level proxy.
+	ProjectUUID *string `gorm:"column:project_uuid" json:"projectUuid,omitempty"`
+	ProjectName *string `gorm:"column:project_name" json:"projectName,omitempty"`
 
 	Artifact  *Artifact          `gorm:"foreignKey:UUID;references:UUID" json:"artifact,omitempty"`
 	Endpoints []MCPProxyEndpoint `gorm:"foreignKey:MCPProxyUUID;references:UUID;constraint:OnDelete:CASCADE" json:"endpoints,omitempty"`
@@ -79,11 +83,21 @@ type MCPProxyConfig struct {
 	Context      *string               `json:"context,omitempty"`
 	Vhost        *string               `json:"vhost,omitempty"`
 	SpecVersion  string                `json:"specVersion,omitempty"`
+	SpecVersions []string              `json:"specVersions,omitempty"`
 	Upstream     UpstreamConfig        `json:"upstream,omitempty"`
 	Resilience   *Resilience           `json:"resilience,omitempty"`
 	Policies     []MCPPolicy           `json:"policies,omitempty"`
 	Capabilities *MCPProxyCapabilities `json:"capabilities,omitempty"`
 	Security     *SecurityConfig       `json:"security,omitempty"`
+	// Source records the Integration Platform component endpoint a project-scoped
+	// proxy was published from. Nil for organization-level proxies.
+	Source *MCPProxySource `json:"source,omitempty"`
+}
+
+// MCPProxySource identifies the component endpoint an MCP proxy was published from.
+type MCPProxySource struct {
+	ComponentName string `json:"componentName"`
+	EndpointName  string `json:"endpointName"`
 }
 
 // MCPProxyEndpoint is the deployable proxy definition. One endpoint can be deployed
@@ -142,14 +156,37 @@ type MCPEndpointConfig struct {
 	Resilience   *Resilience           `json:"resilience,omitempty"`
 	Policies     []MCPPolicy           `json:"policies,omitempty"`
 	Capabilities *MCPProxyCapabilities `json:"capabilities,omitempty"`
+	SpecVersions []string              `json:"specVersions,omitempty"`
 	Security     *SecurityConfig       `json:"security,omitempty"`
+	// ReleaseBindingName is the source component's release binding a project proxy binding was resolved from,
+	// when it was given one. Unset on org proxies.
+	ReleaseBindingName string `json:"releaseBindingName,omitempty"`
 }
 
 // MCP proxy per-environment deployment status values reported on read.
 const (
-	MCPDeploymentStatusDeployed   = "Deployed"
-	MCPDeploymentStatusUndeployed = "Undeployed"
+	MCPDeploymentStatusDeploying   = "Deploying"
+	MCPDeploymentStatusDeployed    = "Deployed"
+	MCPDeploymentStatusUndeploying = "Undeploying"
+	MCPDeploymentStatusUndeployed  = "Undeployed"
+	MCPDeploymentStatusFailed      = "Failed"
 )
+
+// MCPDeploymentStatusOf is the MCP API's word for the status a user is shown. MCP keeps its own vocabulary.
+func MCPDeploymentStatusOf(status UserStatus) string {
+	switch status.Status {
+	case DeploymentStatusPending, DeploymentStatusDeploying:
+		return MCPDeploymentStatusDeploying
+	case DeploymentStatusDeployed:
+		return MCPDeploymentStatusDeployed
+	case DeploymentStatusUndeploying:
+		return MCPDeploymentStatusUndeploying
+	case DeploymentStatusFailed:
+		return MCPDeploymentStatusFailed
+	default:
+		return MCPDeploymentStatusUndeployed
+	}
+}
 
 // MCPPolicy represents a policy attached to an MCP proxy.
 type MCPPolicy struct {
@@ -178,6 +215,7 @@ type MCPProxyDTO struct {
 	InCatalog      bool                  `json:"inCatalog"`
 	McpSpecVersion *string               `json:"mcpSpecVersion,omitempty"`
 	Name           string                `json:"name"`
+	ProjectName    *string               `json:"projectName,omitempty"`
 	Endpoints      []MCPProxyEndpointDTO `json:"endpoints,omitempty"`
 	UpdatedAt      *time.Time            `json:"updatedAt,omitempty"`
 	Version        string                `json:"version"`
@@ -188,14 +226,15 @@ type MCPProxyDTO struct {
 // Environments carries target environment UUIDs (DeploymentStatus ignored). On read,
 // each entry reports the (endpoint, environment) deployment status.
 type MCPProxyEndpointDTO struct {
-	ID           string                      `json:"id"`
-	Name         string                      `json:"name,omitempty"`
-	Upstream     UpstreamConfig              `json:"upstream"`
-	Resilience   *Resilience                 `json:"resilience,omitempty"`
-	Policies     *[]MCPPolicy                `json:"policies,omitempty"`
-	Capabilities *MCPProxyCapabilities       `json:"capabilities,omitempty"`
-	Security     *SecurityConfig             `json:"security,omitempty"`
-	Environments []MCPEndpointEnvironmentDTO `json:"environments,omitempty"`
+	ID              string                      `json:"id"`
+	Name            string                      `json:"name,omitempty"`
+	Upstream        UpstreamConfig              `json:"upstream"`
+	Resilience      *Resilience                 `json:"resilience,omitempty"`
+	Policies        *[]MCPPolicy                `json:"policies,omitempty"`
+	Capabilities    *MCPProxyCapabilities       `json:"capabilities,omitempty"`
+	McpSpecVersions *[]string                   `json:"mcpSpecVersions,omitempty"`
+	Security        *SecurityConfig             `json:"security,omitempty"`
+	Environments    []MCPEndpointEnvironmentDTO `json:"environments,omitempty"`
 }
 
 // MCPEndpointEnvironmentDTO is one endpoint→environment binding. EnvironmentUUID is
@@ -231,6 +270,7 @@ type MCPProxyListItem struct {
 	ID             *string    `json:"id,omitempty"`
 	McpSpecVersion *string    `json:"mcpSpecVersion,omitempty"`
 	Name           *string    `json:"name,omitempty"`
+	ProjectName    *string    `json:"projectName,omitempty"`
 	Status         *string    `json:"status,omitempty"`
 	UpdatedAt      *time.Time `json:"updatedAt,omitempty"`
 	Version        *string    `json:"version,omitempty"`
@@ -252,8 +292,9 @@ type MCPServerInfoFetchRequest struct {
 
 // MCPServerInfoFetchResponse contains the MCP server metadata and capabilities.
 type MCPServerInfoFetchResponse struct {
-	Prompts    *[]map[string]interface{} `json:"prompts,omitempty"`
-	Resources  *[]map[string]interface{} `json:"resources,omitempty"`
-	ServerInfo *map[string]interface{}   `json:"serverInfo,omitempty"`
-	Tools      *[]map[string]interface{} `json:"tools,omitempty"`
+	Prompts           *[]map[string]interface{} `json:"prompts,omitempty"`
+	Resources         *[]map[string]interface{} `json:"resources,omitempty"`
+	ServerInfo        *map[string]interface{}   `json:"serverInfo,omitempty"`
+	SupportedVersions *[]string                 `json:"supportedVersions,omitempty"`
+	Tools             *[]map[string]interface{} `json:"tools,omitempty"`
 }

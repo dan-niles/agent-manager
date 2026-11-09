@@ -24,6 +24,7 @@ import {
   useProvisionAgentIdentity,
   useRetryAgentIdentityProvisioning,
 } from "@agent-management-platform/api-client";
+import { useFeatureFlag, useResourceAccess } from "@agent-management-platform/feature-management";
 import {
   OverviewSectionCard,
   useAgentRolesAndGroups,
@@ -50,11 +51,17 @@ interface EnvAgentRolesGroupsSectionProps {
 export const EnvAgentRolesGroupsSection: React.FC<EnvAgentRolesGroupsSectionProps> = ({
   orgId, projectId, agentId, envId,
 }) => {
+  // useAgentIdentityBinding has no `enabled` option, so the ids are withheld
+  // when Agent ID is disabled to keep the identity request from firing.
+  const agentIdEnabled = useFeatureFlag("enableAgentIdentity");
+  const { canWrite } = useResourceAccess("agent_identity");
   const {
     binding, provisioned, isLoading: isLoadingIdentity, isError: isIdentityError,
-  } = useAgentIdentityBinding({
-    orgId, projectId, agentId, envId,
-  });
+  } = useAgentIdentityBinding(
+    agentIdEnabled
+      ? { orgId, projectId, agentId, envId }
+      : { orgId: "", projectId: "", agentId: "", envId: "" },
+  );
   const isFailed = binding?.status === "failed";
   // No binding row exists for this environment at all yet — distinct from
   // "pending"/"in_progress" (already attempted, still running) or "failed"
@@ -93,9 +100,9 @@ export const EnvAgentRolesGroupsSection: React.FC<EnvAgentRolesGroupsSectionProp
 
   // Same lookup the agent-id page uses: the Thunder Agent ID is a field on the
   // per-env identity-agents list, matched by agent + project name.
-  const { data: identityAgentsData, isError: isAgentsError } = useListAgentIdentityAgents({
-    orgName: orgId, envName: envId,
-  });
+  const { data: identityAgentsData, isError: isAgentsError } = useListAgentIdentityAgents(
+    agentIdEnabled ? { orgName: orgId, envName: envId } : { orgName: "", envName: "" },
+  );
   const thunderAgentId = useMemo(
     () => identityAgentsData?.agents.find(
       (item) => item.agentName === agentId && item.projectName === projectId,
@@ -112,6 +119,8 @@ export const EnvAgentRolesGroupsSection: React.FC<EnvAgentRolesGroupsSectionProp
   };
 
   const hasTags = roles.length > 0 || groups.length > 0;
+
+  if (!agentIdEnabled) return null;
 
   return (
     <OverviewSectionCard
@@ -225,6 +234,7 @@ export const EnvAgentRolesGroupsSection: React.FC<EnvAgentRolesGroupsSectionProp
           severity="error"
           icon={<AlertTriangle size={18} />}
           action={
+            canWrite && (
             <Button
               color="inherit"
               size="small"
@@ -235,6 +245,7 @@ export const EnvAgentRolesGroupsSection: React.FC<EnvAgentRolesGroupsSectionProp
             >
               {isRetrying ? "Retrying..." : "Retry"}
             </Button>
+            )
           }
           sx={{ mt: 1.5, flexWrap: "wrap", "& .MuiAlert-action": { flexShrink: 0 } }}
         >
@@ -246,6 +257,7 @@ export const EnvAgentRolesGroupsSection: React.FC<EnvAgentRolesGroupsSectionProp
           severity={isProvisionError ? "error" : "info"}
           icon={isProvisionError ? <AlertTriangle size={18} /> : <Info size={18} />}
           action={
+            canWrite && (
             <Button
               color="inherit"
               size="small"
@@ -254,8 +266,9 @@ export const EnvAgentRolesGroupsSection: React.FC<EnvAgentRolesGroupsSectionProp
               startIcon={isProvisioning ? <CircularProgress size={14} color="inherit" /> : <Fingerprint size={14} />}
               sx={{ whiteSpace: "nowrap" }}
             >
-              {isProvisioning ? "Creating..." : "Create Agent ID"}
+              {isProvisioning ? "Creating..." : "Create agent ID"}
             </Button>
+            )
           }
           sx={{ mt: 1.5, flexWrap: "wrap", "& .MuiAlert-action": { flexShrink: 0 } }}
         >

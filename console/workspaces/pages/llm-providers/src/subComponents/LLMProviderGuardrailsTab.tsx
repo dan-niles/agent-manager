@@ -51,6 +51,7 @@ import {
   type ParameterValues,
   useUnsavedChangesGuard,
 } from "@agent-management-platform/shared-component";
+import { useResourceAccess } from "@agent-management-platform/feature-management";
 import { useOpenApiSpec } from "../hooks/useOpenApiSpec";
 import {
   extractResourcesFromSpec,
@@ -94,21 +95,6 @@ function pathMatchesResource(
   );
 }
 
-function pathsIncludeEquivalent(
-  paths: LLMPolicyPath[],
-  newPath: LLMPolicyPath,
-): boolean {
-  const newMethods = [...(newPath.methods ?? [])].sort();
-  return paths.some((p) => {
-    if (p.path !== newPath.path) return false;
-    const methods = [...(p.methods ?? [])].sort();
-    return (
-      methods.length === newMethods.length &&
-      methods.every((m, i) => m === newMethods[i])
-    );
-  });
-}
-
 type DrawerContext =
   | { type: "global" }
   | { type: "resource"; method: string; path: string };
@@ -138,6 +124,7 @@ export function LLMProviderGuardrailsTab({
   onUpdate,
   isUpdating,
 }: LLMProviderGuardrailsTabProps) {
+  const { canWrite } = useResourceAccess("llm_provider");
   const { orgId } = useParams<{ orgId: string }>();
   const { data: catalogData } = useLLMPoliciesCatalog(
     orgId,
@@ -300,30 +287,28 @@ export function LLMProviderGuardrailsTab({
               params,
             };
 
-      const existing = policies.find(
+      const existingIndex = policies.findIndex(
         (p) => p.name === guardrail.name && p.version === guardrail.version,
       );
+      const existing = existingIndex >= 0 ? policies[existingIndex] : undefined;
+      const newPolicy: LLMPolicy = {
+        name: guardrail.name,
+        version: guardrail.version,
+        paths: [newPath],
+      };
 
       let nextPolicies: LLMPolicy[];
-      if (existing) {
-        const currentPaths = existing.paths ?? [];
-        const dedupedPaths = pathsIncludeEquivalent(currentPaths, newPath)
-          ? currentPaths
-          : [...currentPaths, newPath];
-        nextPolicies = policies.map((p) =>
-          p.name === guardrail.name && p.version === guardrail.version
-            ? { ...p, paths: dedupedPaths }
+      if (!existing) {
+        // First use of this guardrail: add it as a new policy.
+        nextPolicies = [...policies, newPolicy];
+      } else {
+        // Already added: add this scope to the existing policy, even if the
+        // policy already has a path for the same scope.
+        nextPolicies = policies.map((p, i) =>
+          i === existingIndex
+            ? { ...p, paths: [...(p.paths ?? []), newPath] }
             : p,
         );
-      } else {
-        nextPolicies = [
-          ...policies,
-          {
-            name: guardrail.name,
-            version: guardrail.version,
-            paths: [newPath],
-          },
-        ];
       }
 
       setLocalPolicies(nextPolicies);
@@ -505,14 +490,17 @@ export function LLMProviderGuardrailsTab({
                     label={`${getDisplayName(entry.policy)} (${formatPolicyVersion(entry.policy.version)})`}
                     color="warning"
                     variant="outlined"
-                    onClick={() => handleOpenEditDrawer(entry)}
-                    onDelete={() =>
-                      handleRemoveGuardrail(entry.policyIndex, entry.pathIndex)
+                    onClick={canWrite ? () => handleOpenEditDrawer(entry) : undefined}
+                    onDelete={
+                      canWrite
+                        ? () => handleRemoveGuardrail(entry.policyIndex, entry.pathIndex)
+                        : undefined
                     }
                     disabled={isUpdating}
-                    sx={{ cursor: "pointer" }}
+                    sx={{ cursor: canWrite ? "pointer" : undefined }}
                   />
                 ))}
+                {canWrite && (
                 <Button
                   variant="contained"
                   size="small"
@@ -520,8 +508,9 @@ export function LLMProviderGuardrailsTab({
                   onClick={() => handleOpenDrawer({ type: "global" })}
                   disabled={isUpdating}
                 >
-                  Add Guardrail
+                  Add guardrail
                 </Button>
+                )}
               </Stack>
             </Box>
 
@@ -547,10 +536,12 @@ export function LLMProviderGuardrailsTab({
               ) : (
                 <Box>
                   <SearchBar
-                    placeholder="Search resources…"
+                    placeholder="Search resources"
+                    size="small"
+                    width="standard"
                     value={resourceSearch}
                     onChange={(e) => setResourceSearch(e.target.value)}
-                    sx={{ mb: 1, width: "100%" }}
+                    sx={{ mb: 1 }}
                   />
                   {filteredResources.length === 0 ? (
                     <ListingTable.Container>
@@ -618,19 +609,25 @@ export function LLMProviderGuardrailsTab({
                                     label={`${getDisplayName(entry.policy)} (${formatPolicyVersion(entry.policy.version)})`}
                                     color="warning"
                                     variant="outlined"
-                                    onClick={() => handleOpenEditDrawer(entry)}
-                                    onDelete={() =>
-                                      handleRemoveGuardrail(
-                                        entry.policyIndex,
-                                        entry.pathIndex,
-                                      )
+                                    onClick={
+                                      canWrite ? () => handleOpenEditDrawer(entry) : undefined
+                                    }
+                                    onDelete={
+                                      canWrite
+                                        ? () =>
+                                            handleRemoveGuardrail(
+                                              entry.policyIndex,
+                                              entry.pathIndex,
+                                            )
+                                        : undefined
                                     }
                                     disabled={isUpdating}
-                                    sx={{ cursor: "pointer" }}
+                                    sx={{ cursor: canWrite ? "pointer" : undefined }}
                                   />
                                 ))
                               )}
                             </Stack>
+                            {canWrite && (
                             <Button
                               variant="outlined"
                               size="small"
@@ -644,8 +641,9 @@ export function LLMProviderGuardrailsTab({
                               }
                               disabled={isUpdating}
                             >
-                              Add Guardrail
+                              Add guardrail
                             </Button>
+                            )}
                           </AccordionDetails>
                         </Accordion>
                       );
@@ -669,6 +667,8 @@ export function LLMProviderGuardrailsTab({
         </Stack>
       </Box>
 
+      {canWrite && (
+      <>
       <Divider />
       <Stack direction="row" spacing={1.5} justifyContent="flex-end" sx={{ pt: 2 }}>
         <Button
@@ -686,38 +686,21 @@ export function LLMProviderGuardrailsTab({
           {isUpdating ? "Saving..." : "Save"}
         </Button>
       </Stack>
+      </>
+      )}
 
       <PolicySelectorDrawer
-        open={drawerOpen}
+        open={canWrite && drawerOpen}
         onClose={handleCloseDrawer}
         onSubmit={handleDrawerSubmit}
         providerId={providerData?.uuid}
         policyNoun="guardrail"
         loadingLabel="Loading guardrails..."
-        searchPlaceholder="Search guardrails..."
+        searchPlaceholder="Search guardrails"
         catalogErrorLabel="Failed to load guardrails."
         emptySearchTitle="No guardrails match your search"
         emptyCatalogTitle="No guardrails available"
         emptyCatalogDescription="No guardrail policies are available in the catalog."
-        disabledPolicyKeys={
-          editingContext
-            ? []
-            : policies
-                .filter((p) =>
-                  drawerContext?.type === "global"
-                    ? (p.paths ?? []).some(isGlobalPath)
-                    : drawerContext?.type === "resource"
-                      ? (p.paths ?? []).some((path) =>
-                          pathMatchesResource(
-                            path,
-                            drawerContext.path,
-                            drawerContext.method,
-                          ),
-                        )
-                      : false,
-                )
-                .map((p) => `${p.name}@${p.version}`)
-        }
         existingSettings={editingContext?.params}
         editPolicyKey={
           editingContext

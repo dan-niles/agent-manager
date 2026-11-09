@@ -43,6 +43,7 @@ func TestDomainActionsMatchRouteDerivedActions(t *testing.T) {
 		action  Action
 	}{
 		{"POST /orgs/{orgName}/git-secrets", []rbac.Permission{rbac.GitSecretCreate}, ActionGitSecretCreate},
+		{"POST /build-publisher/builds/{buildName}/workload", nil, ActionBuildWorkloadPublish},
 		{"DELETE /orgs/{orgName}/git-secrets/{secretName}", []rbac.Permission{rbac.GitSecretDelete}, ActionGitSecretDelete},
 		{
 			"PUT /orgs/{orgName}/projects/{projName}/agents/{agentName}/environments/{envID}/agent-card/source",
@@ -88,6 +89,14 @@ func TestDomainActionsMatchRouteDerivedActions(t *testing.T) {
 			nil, ActionAgentIdentityRetryProvisioning,
 		},
 		{"PUT /orgs/{orgName}/environments/{envID}/thunder-system-client", nil, ActionServiceAccountConfigure},
+		{"POST /orgs/{orgName}/events/destinations", []rbac.Permission{rbac.EventsManage}, ActionEventDestinationCreate},
+		{"PUT /orgs/{orgName}/events/destinations/{destinationId}", []rbac.Permission{rbac.EventsManage}, ActionEventDestinationUpdate},
+		{"DELETE /orgs/{orgName}/events/destinations/{destinationId}", []rbac.Permission{rbac.EventsManage}, ActionEventDestinationDelete},
+		{"POST /orgs/{orgName}/events/destinations/{destinationId}/rotate-secret", []rbac.Permission{rbac.EventsManage}, ActionEventDestinationRotateSecret},
+		{"POST /orgs/{orgName}/events/destinations/{destinationId}/test", []rbac.Permission{rbac.EventsManage}, ActionEventDestinationTest},
+		{"POST /orgs/{orgName}/events/subscriptions", []rbac.Permission{rbac.EventsManage}, ActionEventSubscriptionCreate},
+		{"PUT /orgs/{orgName}/projects/{projName}/events/subscriptions/{subscriptionId}", []rbac.Permission{rbac.ProjectUpdate}, ActionEventSubscriptionUpdate},
+		{"DELETE /orgs/{orgName}/projects/{projName}/agents/{agentName}/events/subscriptions/{subscriptionId}", []rbac.Permission{rbac.AgentUpdate}, ActionEventSubscriptionDelete},
 		{"DELETE /orgs/{orgName}/environments/{envID}/thunder-system-client", nil, ActionServiceAccountRemove},
 		{"POST /orgs/{orgName}/identities/roles/{roleID}/permissions/add", nil, ActionRoleGrantPermission},
 		{"POST /orgs/{orgName}/identities/roles/{roleID}/permissions/remove", nil, ActionRoleRevokePermission},
@@ -146,6 +155,8 @@ func TestCredentialAndIdentityActionsAreCritical(t *testing.T) {
 		ActionAgentIdentityProvision, ActionAgentIdentityRegenerateSecret, ActionAgentIdentityRevokeSecret,
 		ActionAgentIdentityRetryProvisioning,
 		ActionServiceAccountConfigure, ActionServiceAccountRemove,
+		ActionEventDestinationCreate, ActionEventDestinationUpdate, ActionEventDestinationDelete,
+		ActionEventDestinationRotateSecret,
 		ActionRoleGrantPermission, ActionRoleRevokePermission,
 		ActionRoleAssign, ActionRoleUnassign,
 		ActionGroupAddMember, ActionGroupRemoveMember,

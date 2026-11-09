@@ -23,6 +23,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"github.com/wso2/agent-manager/agent-manager-service/models"
 	"github.com/wso2/agent-manager/agent-manager-service/utils"
@@ -55,6 +56,29 @@ type AgentConfigurationRepository interface {
 	// (e.g. resolving the union of every proxy's scopes) must use this
 	// instead of GetByAgentID, which only ever returns one arbitrary row.
 	ListMCPConfigsByAgent(ctx context.Context, ouID, projectName, agentID string) ([]models.AgentConfiguration, error)
+
+	// ListMCPConfigsByProxy returns every MCP-type AgentConfiguration row in the
+	// organization whose agent_mcp_config_proxy reference names proxyUUID, preloaded with
+	// the mapping and env var rows a binding reconcile reads.
+	//
+	// This is the proxy-side counterpart to ListMCPConfigsByAgent, and deliberately
+	// keys off the configuration's proxy reference rather than its mapping rows: a
+	// connection with no mapping in some (or any) environment is exactly the one a
+	// reconcile needs to find, and a mapping-row join cannot see it.
+	ListMCPConfigsByProxy(ctx context.Context, ouID string, proxyUUID uuid.UUID) ([]models.AgentConfiguration, error)
+
+	// SetMCPProxyRef records the environment-agnostic MCP proxy a configuration
+	// references, inserting or re-pointing its agent_mcp_config_proxy row.
+	SetMCPProxyRef(ctx context.Context, tx *gorm.DB, configUUID, proxyUUID uuid.UUID) error
+
+	// ClearMCPProxyRef removes a configuration's proxy reference, for when its
+	// environments no longer agree on a single proxy.
+	ClearMCPProxyRef(ctx context.Context, tx *gorm.DB, configUUID uuid.UUID) error
+
+	// SetMCPEnvScope records which environments an MCP connection was deliberately
+	// removed from (exclude) and which it was explicitly asked into (include), in one
+	// transaction. Include wins for an environment listed in both.
+	SetMCPEnvScope(ctx context.Context, tx *gorm.DB, configUUID uuid.UUID, exclude, include []uuid.UUID) error
 
 	// List retrieves configurations with pagination
 	List(ctx context.Context, ouID string, limit, offset int) ([]models.AgentConfiguration, error)
@@ -106,15 +130,22 @@ func (r *agentConfigurationRepository) Create(ctx context.Context, tx *gorm.DB, 
 	return nil
 }
 
+// GetByUUID loads one configuration with its LLM and MCP mappings. MCP mappings carry their
+// proxy's endpoint → environment bindings, which per-environment gateway resolution reads.
 func (r *agentConfigurationRepository) GetByUUID(ctx context.Context, configUUID uuid.UUID, ouID string) (*models.AgentConfiguration, error) {
 	var config models.AgentConfiguration
 	err := r.db.WithContext(ctx).
 		Preload("EnvMappings").
 		Preload("EnvMappings.LLMProxy").
 		Preload("EnvMCPMappings").
+		Preload("MCPProxyRef").
+		Preload("MCPEnvExclusions").
+		Preload("MCPScope").
 		Preload("EnvMCPMappings.Artifact").
 		Preload("EnvMCPMappings.MCPProxy").
 		Preload("EnvMCPMappings.MCPProxy.Artifact").
+		Preload("EnvMCPMappings.MCPProxy.Endpoints").
+		Preload("EnvMCPMappings.MCPProxy.Endpoints.Environments").
 		Preload("EnvVariables").
 		Where("uuid = ? AND ou_id = ?", configUUID, ouID).
 		First(&config).Error
@@ -124,15 +155,21 @@ func (r *agentConfigurationRepository) GetByUUID(ctx context.Context, configUUID
 	return &config, err
 }
 
+// GetByAgentID loads an agent's configuration with the same relations as GetByUUID.
 func (r *agentConfigurationRepository) GetByAgentID(ctx context.Context, agentID, ouID string) (*models.AgentConfiguration, error) {
 	var config models.AgentConfiguration
 	err := r.db.WithContext(ctx).
 		Preload("EnvMappings").
 		Preload("EnvMappings.LLMProxy").
 		Preload("EnvMCPMappings").
+		Preload("MCPProxyRef").
+		Preload("MCPEnvExclusions").
+		Preload("MCPScope").
 		Preload("EnvMCPMappings.Artifact").
 		Preload("EnvMCPMappings.MCPProxy").
 		Preload("EnvMCPMappings.MCPProxy.Artifact").
+		Preload("EnvMCPMappings.MCPProxy.Endpoints").
+		Preload("EnvMCPMappings.MCPProxy.Endpoints.Environments").
 		Preload("EnvVariables").
 		Where("agent_id = ? AND ou_id = ?", agentID, ouID).
 		First(&config).Error
@@ -142,16 +179,106 @@ func (r *agentConfigurationRepository) GetByAgentID(ctx context.Context, agentID
 	return &config, err
 }
 
+// ListMCPConfigsByAgent lists an agent's MCP configurations with their mappings, proxies and
+// the proxies' endpoint → environment bindings.
 func (r *agentConfigurationRepository) ListMCPConfigsByAgent(ctx context.Context, ouID, projectName, agentID string) ([]models.AgentConfiguration, error) {
 	var configs []models.AgentConfiguration
 	err := r.db.WithContext(ctx).
 		Preload("EnvMCPMappings").
+		Preload("MCPProxyRef").
+		Preload("MCPEnvExclusions").
+		Preload("MCPScope").
 		Preload("EnvMCPMappings.Artifact").
 		Preload("EnvMCPMappings.MCPProxy").
 		Preload("EnvMCPMappings.MCPProxy.Artifact").
+		Preload("EnvMCPMappings.MCPProxy.Endpoints").
+		Preload("EnvMCPMappings.MCPProxy.Endpoints.Environments").
 		Where("ou_id = ? AND project_name = ? AND agent_id = ? AND type_id = ?", ouID, projectName, agentID, models.AgentConfigTypeIDMCP).
 		Find(&configs).Error
 	return configs, err
+}
+
+// ListMCPConfigsByProxy lists the MCP configurations bound to the given proxy, with the same
+// relations as ListMCPConfigsByAgent plus their env var rows.
+func (r *agentConfigurationRepository) ListMCPConfigsByProxy(ctx context.Context, ouID string, proxyUUID uuid.UUID) ([]models.AgentConfiguration, error) {
+	var configs []models.AgentConfiguration
+	err := r.db.WithContext(ctx).
+		Preload("EnvMCPMappings").
+		Preload("MCPProxyRef").
+		Preload("MCPEnvExclusions").
+		Preload("MCPScope").
+		Preload("EnvMCPMappings.Artifact").
+		Preload("EnvMCPMappings.MCPProxy").
+		Preload("EnvMCPMappings.MCPProxy.Artifact").
+		Preload("EnvMCPMappings.MCPProxy.Endpoints").
+		Preload("EnvMCPMappings.MCPProxy.Endpoints.Environments").
+		Preload("EnvVariables").
+		Joins("JOIN agent_mcp_config_proxy p ON p.config_uuid = agent_configurations.uuid").
+		Where("agent_configurations.ou_id = ? AND agent_configurations.type_id = ? AND p.mcp_proxy_uuid = ?",
+			ouID, models.AgentConfigTypeIDMCP, proxyUUID).
+		Find(&configs).Error
+	return configs, err
+}
+
+// SetMCPProxyRef points a configuration at proxyUUID, inserting the reference row or
+// re-pointing the existing one. Idempotent, so a reconcile converging a stale reference
+// and a write path recording a new one take the same path.
+func (r *agentConfigurationRepository) SetMCPProxyRef(ctx context.Context, tx *gorm.DB, configUUID, proxyUUID uuid.UUID) error {
+	ref := models.AgentMCPConfigProxy{
+		ConfigUUID:   configUUID,
+		TypeID:       models.AgentConfigTypeIDMCP,
+		MCPProxyUUID: proxyUUID,
+	}
+	return tx.WithContext(ctx).
+		Clauses(clause.OnConflict{
+			Columns:   []clause.Column{{Name: "config_uuid"}},
+			DoUpdates: clause.Assignments(map[string]any{"mcp_proxy_uuid": proxyUUID, "updated_at": gorm.Expr("CURRENT_TIMESTAMP")}),
+		}).
+		Create(&ref).Error
+}
+
+// SetMCPEnvScope adds exclude as exclusions and removes include from them, and marks the
+// connection's scope as recorded so the reconcile trusts those exclusions from now on.
+// Idempotent: excluding an already-excluded environment, including a never-excluded one and
+// re-marking a marked connection are all no-ops.
+func (r *agentConfigurationRepository) SetMCPEnvScope(ctx context.Context, tx *gorm.DB, configUUID uuid.UUID, exclude, include []uuid.UUID) error {
+	db := tx.WithContext(ctx)
+	if err := db.Clauses(clause.OnConflict{DoNothing: true}).Create(&models.AgentMCPConfigScope{
+		ConfigUUID: configUUID, TypeID: models.AgentConfigTypeIDMCP,
+	}).Error; err != nil {
+		return err
+	}
+	if len(include) > 0 {
+		if err := db.Where("config_uuid = ? AND environment_uuid IN ?", configUUID, include).
+			Delete(&models.AgentMCPConfigEnvExclusion{}).Error; err != nil {
+			return err
+		}
+	}
+	keep := make(map[uuid.UUID]struct{}, len(include))
+	for _, envUUID := range include {
+		keep[envUUID] = struct{}{}
+	}
+	rows := make([]models.AgentMCPConfigEnvExclusion, 0, len(exclude))
+	for _, envUUID := range exclude {
+		if _, included := keep[envUUID]; included {
+			continue
+		}
+		rows = append(rows, models.AgentMCPConfigEnvExclusion{
+			ConfigUUID: configUUID, EnvironmentUUID: envUUID, TypeID: models.AgentConfigTypeIDMCP,
+		})
+	}
+	if len(rows) == 0 {
+		return nil
+	}
+	return db.Clauses(clause.OnConflict{DoNothing: true}).Create(&rows).Error
+}
+
+// ClearMCPProxyRef drops a configuration's proxy reference. Used when its environments stop
+// agreeing on a single proxy, which leaves no environment-agnostic answer to record.
+func (r *agentConfigurationRepository) ClearMCPProxyRef(ctx context.Context, tx *gorm.DB, configUUID uuid.UUID) error {
+	return tx.WithContext(ctx).
+		Where("config_uuid = ?", configUUID).
+		Delete(&models.AgentMCPConfigProxy{}).Error
 }
 
 // backfillLLMProxyHandles populates the Handle field of each preloaded LLM proxy

@@ -30,15 +30,16 @@ export interface OrganizationResponse {
   description: string;
   namespace: string;
   createdAt: string; // ISO date-time
+  handle?: string; // org handle for console URLs; omitted when the backend can't tell
 }
 
-export interface OrganizationListItem {
-  name: string;
-  createdAt: string; // ISO date-time
-}
+export type OrganizationListItem = Pick<
+  OrganizationResponse,
+  'name' | 'displayName' | 'createdAt' | 'handle'
+>;
 
 export interface OrganizationListResponse extends PaginationMeta {
-  organizations: OrganizationResponse[];
+  organizations: OrganizationListItem[];
 }
 
 // Path/Query helpers

@@ -73,7 +73,8 @@ import {
   useMCPProxySecurity,
 } from "@agent-management-platform/shared-component";
 import { AGENT_ENV_KEY_MAX_LENGTH, type MCPProxyFormEntry } from "../form/schema";
-import { absoluteRouteMap } from "@agent-management-platform/types";
+import { SlotPortal } from "./OptionalSection";
+import { absoluteRouteMap, withBasePath } from "@agent-management-platform/types";
 import { mcpEntryHasAPIKeyVar } from "../utils/mcpEnvVarNames";
 import { envVarNaming, type EnvVarNaming } from "../utils/envVarNaming";
 
@@ -470,6 +471,10 @@ interface MCPProxySectionProps {
   initialEnvironmentName: string | undefined;
   isInitialEnvironmentLoading?: boolean;
   externalEnvKeys?: Set<string>;
+  /** The parent already titles this section (e.g. an accordion). */
+  hideHeading?: boolean;
+  /** Render the add button here (e.g. a parent accordion header) instead of below the entries. */
+  actionSlot?: HTMLElement | null;
 }
 
 export const MCPProxySection: React.FC<MCPProxySectionProps> = ({
@@ -482,6 +487,8 @@ export const MCPProxySection: React.FC<MCPProxySectionProps> = ({
   initialEnvironmentName,
   isInitialEnvironmentLoading = false,
   externalEnvKeys = new Set(),
+  hideHeading = false,
+  actionSlot,
 }) => {
   const { orgId } = useParams<{ orgId: string }>();
 
@@ -638,9 +645,26 @@ export const MCPProxySection: React.FC<MCPProxySectionProps> = ({
     searchTimerRef.current = setTimeout(() => setDebouncedSearch(val), 250);
   }, []);
 
+  const addButton = (
+        <Button
+          variant="outlined"
+          size="small"
+          startIcon={<Plus size={16} />}
+          onClick={handleAddNew}
+          disabled={
+            envsLoading ||
+            isInitialEnvironmentLoading ||
+            proxiesLoading ||
+            targetEnvironments.length === 0
+          }
+        >
+          Add MCP server
+        </Button>
+  );
+
   return (
-    <Form.Section>
-      <Form.Subheader>MCP Servers (Optional)</Form.Subheader>
+    <Stack spacing={2}>
+      {!hideHeading && <Typography variant="subtitle1">MCP Servers (Optional)</Typography>}
 
       <Stack spacing={1}>
         {mcpProxies.map((entry, index) => {
@@ -677,20 +701,7 @@ export const MCPProxySection: React.FC<MCPProxySectionProps> = ({
         })}
 
         <Box sx={{ pt: mcpProxies.length > 0 ? 1 : 0 }}>
-          <Button
-            variant="outlined"
-            size="small"
-            startIcon={<Plus size={16} />}
-            onClick={handleAddNew}
-            disabled={
-              envsLoading ||
-              isInitialEnvironmentLoading ||
-              proxiesLoading ||
-              targetEnvironments.length === 0
-            }
-          >
-            Add
-          </Button>
+          <SlotPortal slot={actionSlot}>{addButton}</SlotPortal>
         </Box>
       </Stack>
 
@@ -759,7 +770,7 @@ export const MCPProxySection: React.FC<MCPProxySectionProps> = ({
                                 )
                               }
                             >
-                              Register MCP Server
+                              Register MCP server
                             </Button>
                           ) : undefined
                         }
@@ -791,10 +802,10 @@ export const MCPProxySection: React.FC<MCPProxySectionProps> = ({
                 <Divider sx={{ mt: 2 }} />
                 <Box
                   component="a"
-                  href={generatePath(
+                  href={withBasePath(generatePath(
                     absoluteRouteMap.children.org.children.mcpProxies.children.add.path,
                     { orgId },
-                  )}
+                  ))}
                   target="_blank"
                   rel="noopener noreferrer"
                   sx={{
@@ -810,7 +821,7 @@ export const MCPProxySection: React.FC<MCPProxySectionProps> = ({
                 >
                   <Plus size={16} />
                   <Typography variant="body2" color="primary">
-                    Register MCP Server
+                    Register MCP server
                   </Typography>
                   <ExternalLink size={14} />
                 </Box>
@@ -819,6 +830,6 @@ export const MCPProxySection: React.FC<MCPProxySectionProps> = ({
           </Stack>
         </DrawerContent>
       </DrawerWrapper>
-    </Form.Section>
+    </Stack>
   );
 };
